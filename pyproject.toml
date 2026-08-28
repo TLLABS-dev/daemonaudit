@@ -33,7 +33,7 @@ dev = ["pytest>=8"]
 daemonaudit = "daemonaudit.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/CHANGEME/daemonaudit"
+Homepage = "https://github.com/TLLABS-dev/daemonaudit"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/daemonaudit"]

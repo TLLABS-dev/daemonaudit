@@ -107,6 +107,15 @@ Codex: read these before C1/C2 — they are the known state, don't re-report the
 - Real box after M2: 0 high · 5 medium · 9 low · complete · 1.2 s. The mediums: unsandboxed local backend, world-readable
   state/logs/history (Hermes umask), and nothing else.
 
+## Decisions recorded from C3 (2026-08-27)
+- SKILL-001 normalises before matching: scripts (continuations, quote-splitting, `+` concat, simple `VAR=` substitution),
+  docs (NFKC, homoglyphs, default-ignorables incl. soft hyphen, link text, bounded base64), Python via stdlib `ast` taint.
+- Credentials are two-tier: `MASTER_ENV` names (Hermes's own provider/platform keys) are risk; scoped names are inventory.
+- Frontmatter is parsed as YAML; `metadata:` declarations are parsed but tagged non-runtime and graded down (Hermes reads top level only).
+- `DEFENSIVE` vocabulary suppresses injection matches on lines that discuss attacks — a known, documented evasion trade-off.
+- Binary files (by extension or NUL sniff) are never scanned by doc heuristics. Scrub's blob pattern excludes `/` so paths survive.
+- Every C3 fixture row is enforced; the corpus is SKILL-001's regression floor.
+
 ## Codex task queue
 
 Take the top unclaimed task. Mark it `claimed <date>` here, then `done <date> → reviews/codex/<file>` when the report is written.
@@ -124,7 +133,7 @@ Output: `reviews/codex/YYYY-MM-DD-m1-review.md`. Do not edit `src/`.
 ### C2 — Evasion fixtures for the secret scanner  `[closed 2026-08-27 → reviews/codex/2026-08-27-evasion-secrets.md · answered in reviews/claude/2026-08-27-evasion-secrets.md — all 10 rows now enforced]`
 Your own C1 item #6 is the brief: the detector now leans toward false negatives (`_looks_random()` rejects lowercase-only tokens with <4 digits; `generic-credential` is keyword-context only; no Azure/Google-OAuth/Discord-bot coverage tests). Pin all of that. Write `tests/fixtures/evasion/` + `tests/test_evasion_secrets.py`: a set of files that contain credential-shaped secrets the current `redact.find_secrets()` **misses** or **mis-classifies** — split across lines, base64/hex-wrapped, in YAML block scalars, in sqlite pages with interleaved nulls, URL-embedded (`https://user:token@host`), in `.env` with `export`, quoted with backslashes, unicode look-alikes. Also files that should produce **no** hit (docs with example keys marked as examples, `${VAR}` references, `op://` refs). Every missed case is an `xfail` test with a one-line reason. Report: `reviews/codex/YYYY-MM-DD-evasion-secrets.md` summarising the detection matrix.
 
-### C3 — Evasion fixtures for skill heuristics  `[done 2026-08-27 → reviews/codex/2026-08-27-evasion-skills.md]`  (M2 shipped SKILL-001 — go)
+### C3 — Evasion fixtures for skill heuristics  `[closed 2026-08-27 → reviews/codex/2026-08-27-evasion-skills.md · answered in reviews/claude/2026-08-27-evasion-skills.md — all 15 rows enforced]`  (M2 shipped SKILL-001 — go)
 `src/daemonaudit/checks/skills.py`. It is regex-only by design (v0.1); your job is to show where regex
 is not enough and pin it. Two directions, both matter:
 1. **Evasions** (false negatives): fixtures under `tests/fixtures/evasion-skills/<skill>/` + `tests/test_evasion_skills.py`,

@@ -294,8 +294,10 @@ def find_secrets(data: str | bytes) -> list[tuple[str, str]]:
 
 # --- output scrubbing (broader than detection) -----------------------------------------
 
-# Anything that looks like an opaque blob: 40+ url/base64-ish chars with both digits and letters.
-_BLOB = re.compile(r"(?<![A-Za-z0-9_\-+/])[A-Za-z0-9_\-+/=]{40,}(?![A-Za-z0-9_\-+/=])")
+# Anything that looks like an opaque blob: 40+ base64/url-safe chars with both digits and
+# letters. No '/' in the class so file paths with digits are left alone; base64 carriers
+# containing '/' are still scrubbed via Hit.carrier above.
+_BLOB = re.compile(r"(?<![A-Za-z0-9_\-+/=])[A-Za-z0-9_\-+=]{40,}(?![A-Za-z0-9_\-+/=])")
 
 
 def scrub(text: str) -> str:

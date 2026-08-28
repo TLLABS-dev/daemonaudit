@@ -20,7 +20,8 @@ def test_base64_carrier_is_scrubbed_and_provenance_recorded():
 
 
 def test_scrub_leaves_ordinary_report_text_alone():
-    text = "6 file(s) in logs/ readable by any user on the host · config.yaml.bak.20260827_140944 (mode 644)"
+    text = ("6 file(s) in logs/ readable by any user on the host · config.yaml.bak.20260827_140944 (mode 644) · "
+            "skills/research/research-paper-writing/references/arxiv-2401-12345-long-reference-name.pdf (bundled)")
     assert scrub(text) == text
 
 

@@ -20,11 +20,21 @@ def _icacls(path: Path, *args: str) -> None:
     subprocess.run(["icacls", str(path), *args], check=True, capture_output=True, text=True)
 
 
+def _try_icacls(path: Path, *args: str) -> bool:
+    return subprocess.run(["icacls", str(path), *args], capture_output=True, text=True).returncode == 0
+
+
 def test_acl_modes_exclude_owner_system_and_administrators(tmp_path: Path) -> None:
     path = tmp_path / "private.txt"
     path.write_text("FAKE fixture")
     user = os.environ.get("USERNAME")
     assert user
+    # Establish the test's premise: the current user OWNS the file. On an elevated host
+    # (e.g. a CI runner) new files are owned by the Administrators group, so a later
+    # grant to `user` would correctly read as a non-owner principal — the adapter working
+    # as intended, but not what this test means to check.
+    if not _try_icacls(path, "/setowner", user):
+        pytest.skip("cannot set file owner (needs privilege); ownership premise unavailable")
     _icacls(path, "/inheritance:r", "/grant:r", f"{user}:F")
     plat = WindowsPlatform()
     private = plat.file_mode(path)

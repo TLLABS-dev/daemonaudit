@@ -65,8 +65,15 @@ ANTHROPIC_API_KEY='{FAKE_ANTHROPIC}'
     (good / "SKILL.md").write_text("---\nname: hello\n---\n# Hello\nSay hi.\n")
     (h / "SOUL.md").write_text("Be nice.\n")
     if not sys.platform.startswith("win"):
-        s = socket.socket(socket.AF_UNIX); s.bind(str(h / "gateway.sock")); s.close()
-        os.chmod(h / "gateway.sock", 0o666)
+        cwd = os.getcwd()
+        try:  # bind via a relative path: the tmp path can exceed the AF_UNIX limit on macOS
+            os.chdir(h)
+            s = socket.socket(socket.AF_UNIX); s.bind("gateway.sock"); s.close()
+            os.chmod("gateway.sock", 0o666)
+        except OSError:
+            pass
+        finally:
+            os.chdir(cwd)
     return h
 
 
@@ -127,6 +134,8 @@ def test_skill_categories(m2_home):
 
 @posix_only
 def test_gateway_socket_world_writable(m2_home):
+    if not (m2_home / "gateway.sock").exists():
+        pytest.skip("could not bind a unix socket in this environment")
     r = _run(m2_home)
     fs = _by(r, "NET-002")
     assert fs and fs[0].severity == Severity.HIGH and "gateway.sock" in fs[0].title

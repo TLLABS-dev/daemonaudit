@@ -1,10 +1,16 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from daemonaudit.cli import main
 from daemonaudit.model import CheckResult, Finding, Position, ScanReport, Severity, Target
 from daemonaudit.report.html import render_html
 from conftest import FAKE_ANTHROPIC, FAKE_GITHUB
+
+import sys
+
+posix_only = pytest.mark.skipif(sys.platform.startswith("win"), reason="chmod exit-code semantics are POSIX")
 
 
 def test_html_is_self_contained_and_scrubbed():
@@ -19,6 +25,7 @@ def test_html_is_self_contained_and_scrubbed():
     assert "No attack paths" in out and "prefers-color-scheme" in out
 
 
+@posix_only
 def test_cli_writes_html_and_json(tmp_path, hermes_home):
     html_path, json_path = tmp_path / "r.html", tmp_path / "r.json"
     rc = main(["scan", "--home", str(hermes_home), "--html", str(html_path), "--json", str(json_path), "--no-banner"])

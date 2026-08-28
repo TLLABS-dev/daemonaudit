@@ -215,6 +215,7 @@ class WindowsPlatform(Platform):
     def _acl(self, path: Path) -> tuple[str, list[dict]]:
         """Return (owner, explicit/effective allow ACE data) via built-in PowerShell."""
         script = (
+            "Import-Module Microsoft.PowerShell.Security -ErrorAction SilentlyContinue;"
             "try{$a=Get-Acl -LiteralPath " + self._ps_literal(str(path)) + " -ErrorAction Stop;"
             "[pscustomobject]@{Owner=$a.Owner;Access=@($a.Access|ForEach-Object{"
             "[pscustomobject]@{Identity=$_.IdentityReference.Value;"
@@ -222,6 +223,11 @@ class WindowsPlatform(Platform):
             "|ConvertTo-Json -Compress -Depth 4}"
             "catch{[Console]::Error.WriteLine($_.Exception.Message);exit 1}"
         )
+        # Launch with PSModulePath removed: when this process is a child of PowerShell 7
+        # (e.g. a GitHub windows runner), the inherited PSModulePath points at Core's
+        # modules and Windows PowerShell 5.1 fails to autoload Microsoft.PowerShell.Security
+        # (Get-Acl). Dropping it lets powershell.exe compute its own default.
+        env = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
         try:
             cp = subprocess.run(
                 ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
@@ -230,6 +236,7 @@ class WindowsPlatform(Platform):
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                env=env,
             )
         except OSError as e:
             raise NotSupported(f"cannot query Windows ACL for {path}: {e}") from e

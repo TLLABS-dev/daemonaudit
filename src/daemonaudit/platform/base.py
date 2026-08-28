@@ -110,6 +110,17 @@ class Platform:
         except (psutil.AccessDenied, psutil.NoSuchProcess, PermissionError) as e:
             raise NotSupported(f"cannot read environ of pid {pid}: {e}") from e
 
+    def children(self, pid: int) -> list[dict]:
+        """Descendants of pid: [{'pid','name'}]."""
+        try:
+            import psutil
+        except ImportError:  # pragma: no cover
+            return []
+        try:
+            return [{"pid": c.pid, "name": c.name()} for c in psutil.Process(pid).children(recursive=True)]
+        except (psutil.AccessDenied, psutil.NoSuchProcess):
+            return []
+
     def find_processes(self, needle: str) -> list[dict]:
         try:
             import psutil

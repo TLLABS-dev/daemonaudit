@@ -45,7 +45,7 @@ def _candidate_files(target: Target):
             if p not in seen:
                 seen.add(p)
                 yield p
-    for p in walk_files(home, lay.exclude_dirs, max_depth=2):
+    for p in walk_files(home, lay.exclude_dirs, max_depth=2, exclude_root=lay.exclude_root_dirs):
         if p not in seen and lay.is_backup(p.name):
             seen.add(p)
             yield p

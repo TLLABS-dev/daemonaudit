@@ -21,10 +21,12 @@ HERMES_LAYOUT = Layout(
         "config.yaml", "state.db", "kanban.db", ".hermes_history", ".skills_prompt_snapshot.json",
         "sessions", "logs", "memories", "cron", "cache",
     ],
-    exclude_dirs={"hermes-agent", "venv", ".venv", "node_modules", "bin", "__pycache__"},
+    exclude_dirs={"venv", ".venv", "node_modules", "__pycache__", ".git"},
+    exclude_root_dirs={"hermes-agent", "bin"},
     data_extensions={".pid", ".lock", ".log", ".json", ".db", ".yaml", ".yml", ".md", ".txt", ".bak", ".etag", ".db-shm", ".db-wal"},
     transcript_hints=("sessions", "logs", "state.db", ".hermes_history", "memories"),
     preferred_vault=".env",
+    bundled_skills_dir="hermes-agent/skills",
 )
 
 DEFAULT_PORTS = {"api_server": 8642, "bluebubbles_webhook": 8645, "desktop_cdp": 9222}

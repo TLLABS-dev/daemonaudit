@@ -119,7 +119,7 @@ def backup_weaker_than_original(target: Target, plat: Platform) -> CheckOutput:
     _need_posix(plat)
     home, lay = target.home, target.layout
     out = CheckOutput()
-    for bak in walk_files(home, lay.exclude_dirs, max_depth=2):
+    for bak in walk_files(home, lay.exclude_dirs, max_depth=2, exclude_root=lay.exclude_root_dirs):
         orig = _original_for(bak, lay)
         if orig is None:
             continue
@@ -173,7 +173,7 @@ def writable_or_executable_state(target: Target, plat: Platform) -> CheckOutput:
     world_w: list[str] = []
     group_w: list[str] = []
     exec_data: list[str] = []
-    for p in walk_entries(home, lay.exclude_dirs, max_depth=3):
+    for p in walk_entries(home, lay.exclude_dirs, max_depth=3, exclude_root=lay.exclude_root_dirs):
         m = _mode(plat, p, out)
         if m is None or m.is_socket:
             continue

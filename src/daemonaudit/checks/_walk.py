@@ -12,7 +12,12 @@ def _guard_root(root: Path) -> bool:
     return root.exists() and not root.is_symlink()
 
 
-def walk_files(root: Path, exclude: set[str], max_depth: int = 4) -> Iterator[Path]:
+def _prune(d: Path, root: Path, dirnames: list[str], exclude: set[str], exclude_root: set[str]) -> None:
+    banned = exclude | (exclude_root if d == root else set())
+    dirnames[:] = [n for n in dirnames if n not in banned and not (d / n).is_symlink()]
+
+
+def walk_files(root: Path, exclude: set[str], max_depth: int = 4, exclude_root: set[str] = frozenset()) -> Iterator[Path]:
     root = Path(root)
     if not _guard_root(root):
         return
@@ -24,7 +29,7 @@ def walk_files(root: Path, exclude: set[str], max_depth: int = 4) -> Iterator[Pa
         d = Path(dirpath)
         if len(d.parts) - base_depth >= max_depth:
             dirnames[:] = []
-        dirnames[:] = [n for n in dirnames if n not in exclude and not (d / n).is_symlink()]
+        _prune(d, root, dirnames, exclude, exclude_root)
         for fn in filenames:
             p = d / fn
             if p.is_symlink():
@@ -32,7 +37,7 @@ def walk_files(root: Path, exclude: set[str], max_depth: int = 4) -> Iterator[Pa
             yield p
 
 
-def walk_entries(root: Path, exclude: set[str], max_depth: int = 3) -> Iterator[Path]:
+def walk_entries(root: Path, exclude: set[str], max_depth: int = 3, exclude_root: set[str] = frozenset()) -> Iterator[Path]:
     """Files *and* directories below root (not root itself)."""
     root = Path(root)
     if not _guard_root(root) or not root.is_dir():
@@ -42,7 +47,7 @@ def walk_entries(root: Path, exclude: set[str], max_depth: int = 3) -> Iterator[
         d = Path(dirpath)
         if len(d.parts) - base_depth >= max_depth:
             dirnames[:] = []
-        dirnames[:] = [n for n in dirnames if n not in exclude and not (d / n).is_symlink()]
+        _prune(d, root, dirnames, exclude, exclude_root)
         for n in dirnames:
             yield d / n
         for fn in filenames:

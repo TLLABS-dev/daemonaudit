@@ -84,3 +84,7 @@ def run_all(target: Target, plat: Platform, include_red: bool = False) -> list[C
 def load_builtin_checks() -> None:
     import daemonaudit.checks.secrets  # noqa: F401
     import daemonaudit.checks.perms  # noqa: F401
+    import daemonaudit.checks.network  # noqa: F401
+    import daemonaudit.checks.policy  # noqa: F401
+    import daemonaudit.checks.skills  # noqa: F401
+    import daemonaudit.checks.advisories  # noqa: F401

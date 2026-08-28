@@ -9,7 +9,7 @@ platform adapter. Both read `AGENTS.md` first. Humans read this file to see wher
 | # | Scope | Status |
 |---|-------|--------|
 | 1 | Skeleton, model, redaction, Hermes discovery, checks SEC-001 / PERM-001..003, terminal + JSON report, tests | **done 2026-08-27** (pending Codex review) |
-| 2 | Checks 5–16: policy (`approvals`, yolo, `terminal.backend`, `WRITE_SAFE_ROOT`), gateway/platform allowlists, API server exposure, webhook secrets, redaction flags, SSRF guard, MCP/env passthrough secrets, skills heuristics, listening sockets, advisories | next |
+| 2 | NET-001/002 listeners + unix sockets; POL-001..010 (yolo/exec-ask, approvals, sandbox, allow-all users, API server, webhooks/dashboard, debug leaks, SSRF/tirith/project plugins, env passthrough, MCP literal secrets); SKILL-001 (8 categories, bundled-skill detection); ADV-001 (local update cache + acked advisories) | **done 2026-08-27** (pending Codex C3) |
 | 3 | Red probes (localhost only): unauth gateway/API hit, `/proc/<pid>/environ` read, protected-file read as daemon UID. Chain rules → attack paths + per-secret blast radius | |
 | 4 | HTML report, README with real screenshot, `uvx` install, mascot SVG, tag v0.1.0 | |
 | v0.2 | Windows ACL adapter, canary-injection probe, OpenClaw + generic MCP adapters, local-Ollama semantic skill review, guided remediation with rollback, `dir_fd`-relative walking for hostile trees, scrub-only pattern set broader than finding patterns | |
@@ -90,6 +90,23 @@ Codex: read these before C1/C2 — they are the known state, don't re-report the
 - The evasion matrix is enforced (no xfails left). New evasions go in as `xfail`; promote when fixed.
 - `Hit.via` is user-visible evidence; `Hit.carrier` never leaves memory.
 
+## Lessons from M2 (2026-08-27)
+- **SKILL-001's first cut cried wolf.** Against the 82 vendor skills it flagged `tmux send-keys … 'JWT tokens'` as
+  exfiltration, `cat ~/.ssh/id_ed25519.pub` as a secret read, a review rubric saying "exfiltration" as injection,
+  and `<!-- ascii-guard-ignore -->` as a hidden instruction. Fixes: object+destination required for "send … token … to",
+  `id_*\b(?!\.pub)` (the `\b` matters — backtracking defeats a bare lookahead), imperative-to-the-agent required in comments,
+  credential-*named* env reads only. Then: **bundled detection** — a flagged file byte-identical to `hermes-agent/skills/…`
+  is labelled `(bundled)` and the category is downgraded one notch (never for invisible-unicode / vault requests / scripts piping to shell).
+- `hermes-agent` and `bin` are excluded **only at the home root** now (`Layout.exclude_root_dirs`); a skill named
+  `hermes-agent` was being swallowed. Any-depth exclusions are just venv/node_modules/__pycache__/.git.
+- Settings come from `discover/hermes_config.py`: config.yaml + .env + (fallback) the audit shell env, with source
+  tracking. Findings show env var *names* and policy values, never credential values.
+- NET-001 attributes sockets to the gateway **and its children** (the node sidecar is a child). psutil `net_connections`
+  needs root on macOS → NotSupported → `skip`, honestly.
+- ADV-001 reads Hermes's own `.update_check` cache. Zero egress preserved.
+- Real box after M2: 0 high · 5 medium · 9 low · complete · 1.2 s. The mediums: unsandboxed local backend, world-readable
+  state/logs/history (Hermes umask), and nothing else.
+
 ## Codex task queue
 
 Take the top unclaimed task. Mark it `claimed <date>` here, then `done <date> → reviews/codex/<file>` when the report is written.
@@ -107,8 +124,21 @@ Output: `reviews/codex/YYYY-MM-DD-m1-review.md`. Do not edit `src/`.
 ### C2 — Evasion fixtures for the secret scanner  `[closed 2026-08-27 → reviews/codex/2026-08-27-evasion-secrets.md · answered in reviews/claude/2026-08-27-evasion-secrets.md — all 10 rows now enforced]`
 Your own C1 item #6 is the brief: the detector now leans toward false negatives (`_looks_random()` rejects lowercase-only tokens with <4 digits; `generic-credential` is keyword-context only; no Azure/Google-OAuth/Discord-bot coverage tests). Pin all of that. Write `tests/fixtures/evasion/` + `tests/test_evasion_secrets.py`: a set of files that contain credential-shaped secrets the current `redact.find_secrets()` **misses** or **mis-classifies** — split across lines, base64/hex-wrapped, in YAML block scalars, in sqlite pages with interleaved nulls, URL-embedded (`https://user:token@host`), in `.env` with `export`, quoted with backslashes, unicode look-alikes. Also files that should produce **no** hit (docs with example keys marked as examples, `${VAR}` references, `op://` refs). Every missed case is an `xfail` test with a one-line reason. Report: `reviews/codex/YYYY-MM-DD-evasion-secrets.md` summarising the detection matrix.
 
-### C3 — Evasion fixtures for skill heuristics  `[blocked: waits for M2 SKILL-001]`
-Same idea against the skills scanner once it exists: `SKILL.md` and scripts that hide `curl | sh`, network calls, secret reads, and invisible-Unicode instructions in ways a regex misses.
+### C3 — Evasion fixtures for skill heuristics  `[done 2026-08-27 → reviews/codex/2026-08-27-evasion-skills.md]`  (M2 shipped SKILL-001 — go)
+`src/daemonaudit/checks/skills.py`. It is regex-only by design (v0.1); your job is to show where regex
+is not enough and pin it. Two directions, both matter:
+1. **Evasions** (false negatives): fixtures under `tests/fixtures/evasion-skills/<skill>/` + `tests/test_evasion_skills.py`,
+   `xfail` per row like C2. Ideas: `curl … | sh` split across lines / variables / `$(…)` / `eval` / python `subprocess`;
+   network calls via `python -c`, `nc`, `openssl s_client`, DNS exfil; secret reads via `cat $HOME/."env"`, `find ~ -name '*.env'`,
+   `env | grep`, `printenv`; injection phrasing with homoglyphs, markdown link text, split words, base64 in SKILL.md;
+   frontmatter tricks (`required_environment_variables` as YAML block list, quoted, or in a `metadata:` subtree);
+   `required_credential_files` pointing at the vault via `../`.
+2. **False positives** (the harder problem — a default Hermes install has 82 vendor skills and the tool must not cry wolf):
+   build fixtures from *legitimate* patterns you'd expect in real skills — API clients reading their own key, install
+   docs, review rubrics that mention "exfiltration", `id_*.pub` public keys, HTML comment markers — and assert **no**
+   finding. Note `_is_bundled()` downgrades vendor-identical files; test that a modified vendor file is NOT downgraded.
+Report: `reviews/codex/YYYY-MM-DD-evasion-skills.md` with a detection matrix like C2. No `src/` edits.
+Same idea against the skills scanner: `SKILL.md` and scripts that hide `curl | sh`, network calls, secret reads, and invisible-Unicode instructions in ways a regex misses.
 
 ### C4 — Windows platform adapter  `[blocked: waits for M3]`
 `src/daemonaudit/platform/windows.py`: implement `file_mode()`-equivalent semantics on top of ACLs (is the file readable/writable by users other than the owner and SYSTEM/Administrators?), plus `listening_sockets()` verification on Windows. Interface is fixed by `platform/base.py`; report anything the interface can't express rather than changing it.

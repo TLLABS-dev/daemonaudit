@@ -132,11 +132,13 @@ class Layout:
     private_files: list[str] = field(default_factory=list)  # transcripts/config/state
     private_dirs: list[str] = field(default_factory=list)
     sprawl_paths: list[str] = field(default_factory=list)  # secrets must NOT appear here
-    exclude_dirs: set[str] = field(default_factory=set)  # never walk (source, venv...)
+    exclude_dirs: set[str] = field(default_factory=set)  # never walk, at any depth (venv, node_modules...)
+    exclude_root_dirs: set[str] = field(default_factory=set)  # never walk, only directly under home (framework source)
     data_extensions: set[str] = field(default_factory=set)  # an x-bit here is suspicious
     backup_markers: tuple[str, ...] = (".bak", "~", ".orig", ".old")
     transcript_hints: tuple[str, ...] = ()
     preferred_vault: str = ".env"  # where the fix text tells people to put credentials
+    bundled_skills_dir: str | None = None  # relative to home: vendor copy of shipped skills, if any
 
     def is_backup(self, name: str) -> bool:
         return any(m in name if m.startswith(".") else name.endswith(m) for m in self.backup_markers)
@@ -161,7 +163,7 @@ class Target:
             "home": str(self.home),
             "version": self.version,
             "pids": self.pids,
-            "meta": self.meta,
+            "meta": {k: v for k, v in self.meta.items() if not k.startswith("_")},
         }
 
 

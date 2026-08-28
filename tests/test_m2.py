@@ -71,10 +71,11 @@ ANTHROPIC_API_KEY='{FAKE_ANTHROPIC}'
 
 
 class FakePlat(PosixPlatform):
-    def __init__(self, sockets, fail=False):
-        self._sockets, self._fail = sockets, fail
+    def __init__(self, sockets, fail=False, home=None):
+        self._sockets, self._fail, self._home = sockets, fail, home
     def find_processes(self, needle):
-        return [{"pid": 4242, "cmdline": "python -m hermes_cli.main gateway run", "user": "x"}]
+        cmd = f"{self._home}/hermes-agent/venv/bin/python -m hermes_cli.main gateway run" if self._home else "python -m hermes_cli.main gateway run"
+        return [{"pid": 4242, "cmdline": cmd, "user": "x"}]
     def children(self, pid):
         return [{"pid": 4243, "name": "node"}] if pid == 4242 else []
     def listening_sockets(self):
@@ -137,13 +138,13 @@ def test_net001_attribution_and_skip(m2_home):
         {"ip": "127.0.0.1", "port": 8789, "pid": 4243, "family": "v4"},  # child sidecar, loopback → INFO
         {"ip": "0.0.0.0", "port": 22, "pid": 1, "family": "v4"},          # not ours → ignored
     ]
-    r = _run(m2_home, FakePlat(socks))
+    r = _run(m2_home, FakePlat(socks, home=m2_home))
     fs = _by(r, "NET-001")
     crit = [f for f in fs if f.severity == Severity.CRITICAL]
     assert len(crit) == 1 and "8642" in crit[0].title
     assert any(f.severity == Severity.INFO and "loopback-only" in f.title for f in fs)
     assert not any("22" == f.asset.split(":")[-1] for f in fs)
-    r2 = _run(m2_home, FakePlat([], fail=True))
+    r2 = _run(m2_home, FakePlat([], fail=True, home=m2_home))
     assert next(x for x in r2.results if x.check_id == "NET-001").status == "skip"
 
 

@@ -36,6 +36,11 @@ def _scan(args: argparse.Namespace) -> int:
     report.attack_paths = build_attack_paths(report)
     report.blast_radius = build_blast_radius(report)
 
+    if args.html:
+        from daemonaudit.report.html import render_html
+
+        Path(args.html).write_text(render_html(report), encoding="utf-8")
+        print(f"wrote {args.html}", file=sys.stderr)
     if args.json is not None:
         from daemonaudit.report.json_out import to_json
 
@@ -45,7 +50,7 @@ def _scan(args: argparse.Namespace) -> int:
         else:
             Path(args.json).write_text(text)
             print(f"wrote {args.json}", file=sys.stderr)
-    else:
+    elif not args.html or args.terminal:
         from daemonaudit.report.terminal import render
 
         render(report, show_banner=not args.no_banner)
@@ -72,6 +77,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("scan", help="audit the daemons on this machine (default)", epilog=EXIT_CODE_HELP)
     s.add_argument("--home", help="daemon home directory (default: $HERMES_HOME or ~/.hermes)")
     s.add_argument("--json", nargs="?", const="-", metavar="FILE", help="emit JSON to FILE, or to stdout with no FILE (diagnostics go to stderr)")
+    s.add_argument("--html", metavar="FILE", help="write a self-contained HTML report to FILE (no scripts, no external assets)")
+    s.add_argument("--terminal", action="store_true", help="also print the terminal report when --html is used")
     s.add_argument("--red", action="store_true", help="also run active probes against this host only (RED-*): unauthenticated HTTP, process environment, vault blast radius")
     s.add_argument("--no-banner", action="store_true")
     s.add_argument("--debug", action="store_true", help="print a (scrubbed) traceback on tool errors")

@@ -9,6 +9,11 @@ import os
 import re
 from pathlib import Path
 
+# A real Hermes process: a python interpreter running the hermes_cli module.
+# Guards against substring self-matches (a shell, grep, or editor that merely
+# mentions 'hermes_cli' on its command line).
+GATEWAY_RE = re.compile(r'(^|[/\\])(python[0-9.]*|py)\b.*\bhermes_cli(\.main)?\b', re.I)
+
 from daemonaudit.model import Layout, Target
 from daemonaudit.platform import Platform
 
@@ -50,6 +55,32 @@ def _version(home: Path) -> str | None:
         return None
 
 
+def _is_hermes_proc(proc: dict) -> bool:
+    return bool(GATEWAY_RE.search(proc.get("cmdline") or ""))
+
+
+def _belongs_to(proc: dict, home: Path, plat: Platform) -> bool:
+    """Attribute a hermes_cli process to *this* home only.
+
+    The gateway runs from `<home>/hermes-agent/venv/bin/python`, so the interpreter
+    path in the cmdline names the home. Fall back to the process's HERMES_HOME if we
+    may read its environment. A process we cannot attribute is not ours — scanning
+    a demo or backup home must never probe the real daemon.
+    """
+    cmd = proc.get("cmdline") or ""
+    if str(home) in cmd:
+        return True
+    try:
+        env = plat.process_env(proc["pid"])
+    except Exception:  # noqa: BLE001 - NotSupported / gone
+        return False
+    ph = env.get("HERMES_HOME")
+    if ph:
+        return Path(os.path.realpath(os.path.expanduser(ph))) == home
+    # No HERMES_HOME and no path hint: only the default home may claim it.
+    return home == Path(os.path.realpath(Path.home() / ".hermes")) and str(Path.home()) in cmd
+
+
 def discover_hermes(plat: Platform, home_override=None) -> Target | None:
     given = hermes_home(home_override)
     if not given.is_dir():
@@ -57,7 +88,7 @@ def discover_hermes(plat: Platform, home_override=None) -> Target | None:
     # Resolve the root exactly once. Everything below it is walked with no-follow
     # semantics; a symlink *as* the root is a user choice, a symlink *inside* is not.
     home = Path(os.path.realpath(given))
-    procs = plat.find_processes("hermes_cli")
+    procs = [p for p in plat.find_processes("hermes_cli") if _is_hermes_proc(p) and _belongs_to(p, home, plat)]
     gateway_pids = [p["pid"] for p in procs if "gateway" in p["cmdline"]]
     return Target(
         framework="hermes",

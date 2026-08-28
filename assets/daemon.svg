@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 64 64" role="img" aria-label="daemonaudit mascot: a small purple demon">
+  <path d="M14 22 L8 6 L22 16 Z" fill="#c0392b"/>
+  <path d="M50 22 L56 6 L42 16 Z" fill="#c0392b"/>
+  <circle cx="32" cy="36" r="22" fill="#7d3c98"/>
+  <circle cx="24" cy="32" r="4.5" fill="#fff"/>
+  <circle cx="40" cy="32" r="4.5" fill="#fff"/>
+  <circle cx="25" cy="33" r="2.2" fill="#111"/>
+  <circle cx="41" cy="33" r="2.2" fill="#111"/>
+  <path d="M21 44 Q32 53 43 44" stroke="#fff" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M27 45 l2 4 M37 45 l-2 4" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M52 44 q10 4 4 14 q-2 3 -6 1" stroke="#7d3c98" stroke-width="3" fill="none" stroke-linecap="round"/>
+  <path d="M54 62 l4 -4 l2 5 Z" fill="#c0392b"/>
+</svg>

@@ -11,7 +11,7 @@ platform adapter. Both read `AGENTS.md` first. Humans read this file to see wher
 | 1 | Skeleton, model, redaction, Hermes discovery, checks SEC-001 / PERM-001..003, terminal + JSON report, tests | **done 2026-08-27** (pending Codex review) |
 | 2 | NET-001/002 listeners + unix sockets; POL-001..010 (yolo/exec-ask, approvals, sandbox, allow-all users, API server, webhooks/dashboard, debug leaks, SSRF/tirith/project plugins, env passthrough, MCP literal secrets); SKILL-001 (8 categories, bundled-skill detection); ADV-001 (local update cache + acked advisories) | **done 2026-08-27** (pending Codex C3) |
 | 3 | RED-001 unauth HTTP probe (localhost gate, hard-fail otherwise), RED-002 exec-time process env, RED-003 vault blast radius; `chain/rules.py` (9 rules, tag-based, foothold floor) → attack paths with kill-hop + per-kind blast radius table; `info` status; exit codes ignore INFO | **done 2026-08-27** (pending Codex C4) |
-| 4 | HTML report, README with real screenshot, `uvx` install, mascot SVG, tag v0.1.0 | |
+| 4 | `--html` self-contained report; mascot SVG + `assets/demo-report.svg` screenshot from `scripts/demo_home.py`; LICENSE (MIT); GitHub Actions CI on Linux/macOS/Windows × py3.10/3.12 with a demo smoke-scan + build; README; version 0.1.0 + tag | **done 2026-08-27** |
 | v0.2 | Windows ACL adapter, canary-injection probe, OpenClaw + generic MCP adapters, local-Ollama semantic skill review, guided remediation with rollback, `dir_fd`-relative walking for hostile trees, scrub-only pattern set broader than finding patterns | |
 
 ## Threat model (what every check maps to)
@@ -127,6 +127,19 @@ Codex: read these before C1/C2 — they are the known state, don't re-report the
 - The localhost gate is one function (`probes/red._assert_local`) and it is tested against public IPs and hostnames.
   Every probe goes through `_http_get()` which calls it first. Keep it that way.
 - Real box with `--red`: 0 high · 5 medium · 10 low · 0 paths · vault = 5 credentials / 3 kinds (JWTs in auth.json).
+
+## Lessons from M4 (2026-08-27)
+- **Process attribution was too loose.** `find_processes("hermes_cli")` substring-matches any command
+  line mentioning the string — including daemonaudit's own shell wrapper. Discovery now requires a
+  *python interpreter running hermes_cli* (`GATEWAY_RE`) AND that the process belong to the home being
+  scanned (path in cmdline, or matching `HERMES_HOME`). Scanning a demo/backup home no longer probes the
+  real daemon. Test fixtures were unrealistic (fake gateway cmdlines lacked the venv path); fixed.
+- Screenshot + demo home use only FAKE credentials (`scripts/demo_home.py`); the screenshot is rendered
+  from a home under `$HOME` and deleted, so no scratch path leaks into the committed SVG.
+- HTML report is one file: inlined CSS, no `<script>`, no external asset, light/dark via prefers-color-scheme,
+  everything scrubbed + HTML-escaped. Test asserts no raw secret and no `http(s)://` in the output.
+- PyPI publish is wired but commented in CI — needs the project created + Trusted Publisher. `uvx --from git+…`
+  works today.
 
 ## Lessons from C4 native verification (2026-08-27)
 - **There is no Hermes on the Windows side of TLlabs.** No `%USERPROFILE%\.hermes`, no `HERMES_HOME`, no process.

@@ -11,9 +11,17 @@ from daemonaudit.platform import Platform, q
 from daemonaudit.registry import Skipped, check
 
 
+WINDOWS_NOTE = (" On Windows the permission bits are derived from the ACL conservatively: any Allow entry for a principal "
+                "other than the owner, SYSTEM or Administrators counts as exposure, even a single named service account.")
+
+
 def _need_posix(plat: Platform) -> None:
     if not plat.posix_modes:
-        raise Skipped(f"{plat.name}: POSIX permission bits unavailable (Windows ACL support is v0.2)")
+        raise Skipped(f"{plat.name}: permission bits unavailable")
+
+
+def _note(plat: Platform) -> str:
+    return WINDOWS_NOTE if plat.name == "windows" else ""
 
 
 def _mode(plat: Platform, p: Path, out: CheckOutput):
@@ -51,7 +59,7 @@ def vault_permissions(target: Target, plat: Platform) -> CheckOutput:
                 severity=sev,
                 position=Position.LOCAL,
                 asset=str(path),
-                why=f"This file holds {what}. It should be 0600: any local process running as another user can read it as-is.",
+                why=f"This file holds {what}. It should be 0600: any local process running as another user can read it as-is." + _note(plat),
                 fix=f"chmod 600 {q(path)}",
                 verify_cmd=f"{plat.stat_cmd(path)}  # expect 600",
                 evidence=[f"mode {mode.octal}"],

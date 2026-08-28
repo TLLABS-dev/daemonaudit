@@ -32,10 +32,11 @@ def _server(status: int):
 
 
 class FakePlat(PosixPlatform):
-    def __init__(self, ports, env=None, env_fail=False):
-        self._ports, self._env, self._env_fail = ports, env or {}, env_fail
+    def __init__(self, ports, env=None, env_fail=False, home=None):
+        self._ports, self._env, self._env_fail, self._home = ports, env or {}, env_fail, home
     def find_processes(self, needle):
-        return [{"pid": 4242, "cmdline": "python -m hermes_cli.main gateway run", "user": "tl"}]
+        cmd = f"{self._home}/hermes-agent/venv/bin/python -m hermes_cli.main gateway run" if self._home else "/x/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main gateway run"
+        return [{"pid": 4242, "cmdline": cmd, "user": "tl"}]
     def children(self, pid):
         return []
     def listening_sockets(self):
@@ -83,7 +84,7 @@ def test_probe_refuses_non_local_targets():
 def test_red001_unauth_vs_auth(home):
     open_srv, auth_srv = _server(200), _server(401)
     try:
-        r = _run(home, FakePlat([open_srv.server_port, auth_srv.server_port]))
+        r = _run(home, FakePlat([open_srv.server_port, auth_srv.server_port], home=home))
         fs = _by(r, "RED-001")
         high = [f for f in fs if f.severity == Severity.HIGH]
         assert len(high) == 1 and str(open_srv.server_port) in high[0].title and "net:unauth:verified" in high[0].tags
@@ -94,7 +95,7 @@ def test_red001_unauth_vs_auth(home):
 
 
 def test_red_probes_off_by_default(home):
-    r = _run(home, FakePlat([]), red=False)
+    r = _run(home, FakePlat([], home=home), red=False)
     statuses = {x.check_id: x.status for x in r.results}
     assert statuses["RED-001"] == statuses["RED-002"] == statuses["RED-003"] == "off"
     assert r.exit_code() != 4  # "off" is not incomplete
@@ -103,7 +104,7 @@ def test_red_probes_off_by_default(home):
 # --- RED-002 / RED-003 ---
 def test_red002_process_env_secrets_redacted(home):
     env = {"ANTHROPIC_API_KEY": FAKE_ANTHROPIC, "GITHUB_TOKEN": FAKE_GITHUB, "PATH": "/usr/bin", "MY_SECRET": "hunter2hunter2hunter2"}
-    r = _run(home, FakePlat([], env=env))
+    r = _run(home, FakePlat([], env=env, home=home))
     f = _by(r, "RED-002")[0]
     assert "3 credential(s)" in f.title and "secret:procenv" in f.tags
     blob = json.dumps(f.to_dict())
@@ -111,12 +112,12 @@ def test_red002_process_env_secrets_redacted(home):
 
 
 def test_red002_denied_is_incomplete_not_pass(home):
-    r = _run(home, FakePlat([], env_fail=True))
+    r = _run(home, FakePlat([], env_fail=True, home=home))
     assert next(x for x in r.results if x.check_id == "RED-002").status == "incomplete"
 
 
 def test_red003_blast_radius(home):
-    r = _run(home, FakePlat([]))
+    r = _run(home, FakePlat([], home=home))
     f = _by(r, "RED-003")[0]
     assert "3 credential(s) of 3 kind(s)" in f.title and "secret:vault" in f.tags
     kinds = {b.kind: b for b in r.blast_radius}
@@ -158,7 +159,35 @@ def test_chain_needs_every_hop():
 @posix_only
 def test_end_to_end_local_reader_path(home):
     os.chmod(home / ".env", 0o644)  # vault readable → "Local user → readable credentials"
-    r = _run(home, FakePlat([]))
+    r = _run(home, FakePlat([], home=home))
     assert any(p.name.startswith("Local user → readable") for p in r.attack_paths)
     d = json.loads(to_json(r))
     assert d["attack_paths"] and d["red_probes"] is True and d["summary"]["attack_paths"] >= 1
+
+
+def test_discovery_does_not_attribute_foreign_processes(tmp_path):
+    """Scanning a demo/backup home must never probe the real daemon (M4 lesson)."""
+    class P(PosixPlatform):
+        def find_processes(self, needle):
+            return [{"pid": 1, "cmdline": "/home/someone/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main gateway run", "user": "x"}]
+        def process_env(self, pid):
+            raise NotSupported("denied")
+    home = tmp_path / "demo"; home.mkdir()
+    t = discover_hermes(P(), home)
+    assert t.pids == [] and t.meta["gateway_pids"] == []
+    mine = tmp_path / "mine"; mine.mkdir()
+    class Q(P):
+        def find_processes(self, needle):
+            return [{"pid": 2, "cmdline": f"{mine}/hermes-agent/venv/bin/python -m hermes_cli.main gateway run", "user": "x"}]
+    assert discover_hermes(Q(), mine).pids == [2]
+
+
+def test_discovery_ignores_non_python_mentions(tmp_path):
+    """A shell or editor whose command line merely contains 'hermes_cli' is not the daemon."""
+    class P(PosixPlatform):
+        def find_processes(self, needle):
+            return [{"pid": 9, "cmdline": f"/bin/bash -c grep hermes_cli {tmp_path}/mine/notes", "user": "x"}]
+        def process_env(self, pid):
+            raise NotSupported("denied")
+    home = tmp_path / "mine"; home.mkdir()
+    assert discover_hermes(P(), home).pids == []

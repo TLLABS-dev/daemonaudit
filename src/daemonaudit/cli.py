@@ -28,9 +28,13 @@ def _scan(args: argparse.Namespace) -> int:
     if not targets:
         print("no supported agent daemon found (looked for Hermes at $HERMES_HOME / ~/.hermes; use --home)", file=sys.stderr)
         return EXIT_NO_TARGET
-    report = ScanReport(tool_version=__version__, targets=targets)
+    report = ScanReport(tool_version=__version__, targets=targets, red_enabled=args.red)
     for t in targets:
         report.results.extend(run_all(t, plat, include_red=args.red))
+    from daemonaudit.chain import build_attack_paths, build_blast_radius
+
+    report.attack_paths = build_attack_paths(report)
+    report.blast_radius = build_blast_radius(report)
 
     if args.json is not None:
         from daemonaudit.report.json_out import to_json
@@ -68,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("scan", help="audit the daemons on this machine (default)", epilog=EXIT_CODE_HELP)
     s.add_argument("--home", help="daemon home directory (default: $HERMES_HOME or ~/.hermes)")
     s.add_argument("--json", nargs="?", const="-", metavar="FILE", help="emit JSON to FILE, or to stdout with no FILE (diagnostics go to stderr)")
-    s.add_argument("--red", action="store_true", help="also run active probes (localhost only; none in v0.1)")
+    s.add_argument("--red", action="store_true", help="also run active probes against this host only (RED-*): unauthenticated HTTP, process environment, vault blast radius")
     s.add_argument("--no-banner", action="store_true")
     s.add_argument("--debug", action="store_true", help="print a (scrubbed) traceback on tool errors")
     s.set_defaults(fn=_scan)

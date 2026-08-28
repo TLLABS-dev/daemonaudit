@@ -79,12 +79,50 @@ class Finding:
     evidence: list[str] = field(default_factory=list)
     secrets: list[RedactedSecret] = field(default_factory=list)
     remediation: Remediation | None = None
+    tags: list[str] = field(default_factory=list)  # machine-readable facts for chain rules
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d["severity"] = self.severity.value
         d["position"] = self.position.value
         return d
+
+
+@dataclass
+class AttackPath:
+    """A chain of findings an attacker can walk, and what is at the end of it."""
+
+    name: str
+    narrative: str
+    hops: list[Finding]
+    reaches: str
+    kill_hop: int  # 1-based index of the hop whose fix breaks the whole path
+
+    @property
+    def severity(self) -> Severity:
+        return max((h.severity for h in self.hops), key=lambda s: s.rank)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "narrative": self.narrative,
+            "severity": self.severity.value,
+            "hops": [{"check_id": h.check_id, "title": h.title, "position": h.position.value, "fix": h.fix} for h in self.hops],
+            "reaches": self.reaches,
+            "kill_hop": self.kill_hop,
+            "kill_fix": self.hops[self.kill_hop - 1].fix,
+        }
+
+
+@dataclass
+class BlastEntry:
+    kind: str
+    count: int
+    grants: str
+    where: list[str] = field(default_factory=list)  # redacted displays
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass
@@ -100,7 +138,7 @@ class CheckOutput:
 
 # Result statuses. "off" is a deliberate opt-out (red probes without --red) and does not
 # make a scan incomplete; "skip", "error" and "incomplete" do.
-STATUSES = ("pass", "fail", "skip", "off", "error", "incomplete")
+STATUSES = ("pass", "info", "fail", "skip", "off", "error", "incomplete")  # info = only INFO-severity findings
 INCOMPLETE_STATUSES = {"skip", "error", "incomplete"}
 
 
@@ -187,6 +225,9 @@ class ScanReport:
     tool_version: str
     targets: list[Target] = field(default_factory=list)
     results: list[CheckResult] = field(default_factory=list)
+    attack_paths: list[AttackPath] = field(default_factory=list)
+    blast_radius: list[BlastEntry] = field(default_factory=list)
+    red_enabled: bool = False
     started_at: str = field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds")
     )
@@ -204,6 +245,11 @@ class ScanReport:
         return sorted(out, key=lambda f: (-f.severity.rank, f.position.value, f.asset))
 
     @property
+    def actionable(self) -> list[Finding]:
+        """Findings that are not INFO — the ones that drive exit codes and counts."""
+        return [f for f in self.findings if f.severity != Severity.INFO]
+
+    @property
     def incomplete_results(self) -> list[CheckResult]:
         return [r for r in self.results if r.status in INCOMPLETE_STATUSES]
 
@@ -218,9 +264,9 @@ class ScanReport:
         return c
 
     def exit_code(self) -> int:
-        if any(f.severity.rank >= Severity.HIGH.rank for f in self.findings):
+        if any(f.severity.rank >= Severity.HIGH.rank for f in self.actionable):
             return EXIT_HIGH
-        if self.findings:
+        if self.actionable:
             return EXIT_FINDINGS
         if not self.is_complete:
             return EXIT_INCOMPLETE
@@ -234,5 +280,9 @@ class ScanReport:
             "host": self.host,
             "targets": [t.to_dict() for t in self.targets],
             "results": [r.to_dict() for r in self.results],
-            "summary": {**self.counts(), "complete": self.is_complete, "exit_code": self.exit_code()},
+            "attack_paths": [p.to_dict() for p in self.attack_paths],
+            "blast_radius": [b.to_dict() for b in self.blast_radius],
+            "red_probes": self.red_enabled,
+            "summary": {**self.counts(), "complete": self.is_complete, "exit_code": self.exit_code(),
+                        "attack_paths": len(self.attack_paths)},
         }

@@ -26,7 +26,7 @@ BORDER = {
     Severity.LOW: "cyan",
     Severity.INFO: "dim",
 }
-STATUS_STYLE = {"pass": "green", "fail": "red", "skip": "yellow", "off": "dim", "error": "bold red", "incomplete": "yellow"}
+STATUS_STYLE = {"pass": "green", "info": "green", "fail": "red", "skip": "yellow", "off": "dim", "error": "bold red", "incomplete": "yellow"}
 
 
 def T(s: object, style: str = "") -> Text:
@@ -46,7 +46,35 @@ def render(report: ScanReport, console: Console | None = None, show_banner: bool
         t.add_row(T(tg.framework), T(tg.home), T(tg.version or "?"), T(", ".join(map(str, tg.pids)) or "not running"))
     con.print(t)
 
-    if not report.findings:
+    if report.attack_paths:
+        con.rule(T(f"Attack paths  ({len(report.attack_paths)})", "bold red"))
+        for i, ap in enumerate(report.attack_paths, 1):
+            body = Text()
+            body.append_text(T(ap.narrative + "\n\n", "italic"))
+            for n, h in enumerate(ap.hops, 1):
+                marker = "▶" if n == ap.kill_hop else " "
+                body.append(f" {marker} {n}. ", style="bold")
+                body.append(h.check_id + "  ", style="dim")
+                body.append_text(T(h.title + "\n"))
+            body.append_text(T(f"\nreaches  {ap.reaches}\n", "bold"))
+            body.append("kill it  ", style="bold green")
+            body.append_text(T(f"fix hop {ap.kill_hop}: {ap.hops[ap.kill_hop - 1].fix}\n"))
+            title = Text.assemble(Text(ap.severity.value.upper(), style=SEV_STYLE[ap.severity]), "  ", T(f"path {i}: {ap.name}"))
+            con.print(Panel(body, title=title, title_align="left", border_style=BORDER[ap.severity]))
+    elif report.red_enabled:
+        con.print(Panel(T("No attack paths chain together from the findings above.", "bold green")))
+
+    if report.blast_radius:
+        b = Table(title="Blast radius — what a stolen credential grants", expand=False)
+        for col in ("kind", "count", "grants"):
+            b.add_column(col)
+        for e in report.blast_radius:
+            b.add_row(T(e.kind), T(str(e.count)), T(e.grants))
+        con.print(b)
+    elif not report.red_enabled:
+        con.print(T("run with --red to measure the local blast radius (vault + process environment) and verify listeners", "dim"))
+
+    if not report.actionable:
         if report.is_complete:
             con.print(Panel(T("No findings. All checks completed.", "bold green")))
         else:

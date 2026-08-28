@@ -27,6 +27,16 @@ pytest
 daemonaudit scan
 ```
 
+## What you get
+```
+daemonaudit scan          # passive audit: secrets, permissions, policy, skills, listeners
+daemonaudit scan --red    # + active probes against THIS host only, attack paths, blast radius
+daemonaudit scan --json report.json
+```
+The `--red` report opens with **attack paths** — chains of findings an attacker can walk, each with the
+one hop whose fix kills the whole path — and a **blast radius** table: every credential the audit could
+see, by kind, and what a thief could do with it. Probes never leave localhost and never send credentials.
+
 ## Exit codes (for cron / CI)
 | code | meaning |
 |---|---|

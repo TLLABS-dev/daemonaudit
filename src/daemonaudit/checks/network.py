@@ -84,6 +84,7 @@ def listeners(target: Target, plat: Platform) -> CheckOutput:
                 ),
                 verify_cmd=f"ss -tlnp 2>/dev/null | grep ':{s['port']} ' || lsof -nP -iTCP:{s['port']} -sTCP:LISTEN",
                 evidence=[label],
+                tags=["net:public"] + (["net:unauth"] if api_unauth else []),
             )
         )
     if loop:
@@ -97,6 +98,7 @@ def listeners(target: Target, plat: Platform) -> CheckOutput:
                 why="Loopback listeners are reachable only by processes on this host. That is the right default; listed for inventory.",
                 fix="Nothing to do — keep them this way.",
                 evidence=loop[:15],
+                tags=["net:loopback"],
             )
         )
     return out
@@ -141,6 +143,7 @@ def unix_sockets(target: Target, plat: Platform) -> CheckOutput:
                 fix=f"chmod 600 {p}  # and set umask 077 for the daemon so it is created that way",
                 verify_cmd=plat.stat_cmd(p),
                 evidence=[f"mode {m.octal}"],
+                tags=["local:gateway-socket"] if gateway else [],
             )
         )
     return out

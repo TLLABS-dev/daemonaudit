@@ -149,6 +149,12 @@ def _is_bundled(home: Path, lay, skills_root: Path, p: Path) -> bool:
 
 
 NO_DOWNGRADE = {"invisible", "wants_vault", "pipe_script"}
+SKILL_TAGS = {
+    "pipe_script": ["skill:remote-exec"], "pipe_doc": ["skill:remote-exec"],
+    "injection": ["skill:injection"], "hidden_comment": ["skill:injection"], "invisible": ["skill:injection"],
+    "wants_keys": ["skill:wants-secrets"], "wants_vault": ["skill:wants-secrets"],
+    "net_and_secrets": ["skill:exfil-shape"], "encoded_payload": ["skill:remote-exec"],
+}
 DOWNGRADE = {Severity.HIGH: Severity.MEDIUM, Severity.MEDIUM: Severity.LOW, Severity.LOW: Severity.INFO}
 
 
@@ -444,7 +450,8 @@ def skills(target: Target, plat: Platform) -> CheckOutput:
             sev = DOWNGRADE[sev]
             why += " These declarations sit under `metadata:`, which Hermes does not read for credentials — inert today, but not what an honest skill writes."
         out.findings.append(Finding("SKILL-001", f"{title} — {n} skill(s)", sev, Position.SUPPLY_CHAIN, str(skills_root), why, fix,
-                                    f"daemonaudit scan --home {q(home)}  # SKILL-001 category: {key}", sorted(items)[:15]))
+                                    f"daemonaudit scan --home {q(home)}  # SKILL-001 category: {key}", sorted(items)[:15],
+                                    tags=SKILL_TAGS.get(key, [])))
     out.findings.append(Finding(
         "SKILL-001",
         f"Inventory: {n_skills} skills, {n_scripts} scripts, {len(net_skills)} skill(s) with network calls, {len(scoped)} scoped credential declaration(s)",

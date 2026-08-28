@@ -71,7 +71,9 @@ def run_all(target: Target, plat: Platform, include_red: bool = False) -> list[C
             results.append(CheckResult(c.id, c.title, "error", note=traceback.format_exc(limit=3)))
             continue
         note = "; ".join(out.coverage_notes) if out.coverage_notes else None
-        if out.findings:
+        if out.findings and all(f.severity.value == "info" for f in out.findings):
+            status = "info"
+        elif out.findings:
             status = "fail"
         elif out.coverage_notes:
             status = "incomplete"
@@ -88,3 +90,4 @@ def load_builtin_checks() -> None:
     import daemonaudit.checks.policy  # noqa: F401
     import daemonaudit.checks.skills  # noqa: F401
     import daemonaudit.checks.advisories  # noqa: F401
+    import daemonaudit.probes.red  # noqa: F401

@@ -10,7 +10,7 @@ platform adapter. Both read `AGENTS.md` first. Humans read this file to see wher
 |---|-------|--------|
 | 1 | Skeleton, model, redaction, Hermes discovery, checks SEC-001 / PERM-001..003, terminal + JSON report, tests | **done 2026-08-27** (pending Codex review) |
 | 2 | NET-001/002 listeners + unix sockets; POL-001..010 (yolo/exec-ask, approvals, sandbox, allow-all users, API server, webhooks/dashboard, debug leaks, SSRF/tirith/project plugins, env passthrough, MCP literal secrets); SKILL-001 (8 categories, bundled-skill detection); ADV-001 (local update cache + acked advisories) | **done 2026-08-27** (pending Codex C3) |
-| 3 | Red probes (localhost only): unauth gateway/API hit, `/proc/<pid>/environ` read, protected-file read as daemon UID. Chain rules → attack paths + per-secret blast radius | |
+| 3 | RED-001 unauth HTTP probe (localhost gate, hard-fail otherwise), RED-002 exec-time process env, RED-003 vault blast radius; `chain/rules.py` (9 rules, tag-based, foothold floor) → attack paths with kill-hop + per-kind blast radius table; `info` status; exit codes ignore INFO | **done 2026-08-27** (pending Codex C4) |
 | 4 | HTML report, README with real screenshot, `uvx` install, mascot SVG, tag v0.1.0 | |
 | v0.2 | Windows ACL adapter, canary-injection probe, OpenClaw + generic MCP adapters, local-Ollama semantic skill review, guided remediation with rollback, `dir_fd`-relative walking for hostile trees, scrub-only pattern set broader than finding patterns | |
 
@@ -116,6 +116,18 @@ Codex: read these before C1/C2 — they are the known state, don't re-report the
 - Binary files (by extension or NUL sniff) are never scanned by doc heuristics. Scrub's blob pattern excludes `/` so paths survive.
 - Every C3 fixture row is enforced; the corpus is SKILL-001's regression floor.
 
+## Lessons from M3 (2026-08-27)
+- `/proc/<pid>/environ` is the **exec-time** environment. Hermes loads `.env` after start, so RED-002 came back
+  clean on a box whose daemon plainly holds keys. The check now says exactly what it proved; RED-003 (read the vault
+  as a same-user process) is the real local blast-radius number.
+- INFO-only findings used to mark a check `fail` and would have exited 1 on a clean box. New status `info`;
+  `ScanReport.actionable` excludes INFO from exit codes and counts.
+- First chain run produced two "attack paths" on the default install, both footed on the vendor's own `curl | bash`
+  install docs (bundled, LOW). Rule now: hop 1 ≥ MEDIUM, intermediates ≥ LOW, final hop any. Default install → 0 paths.
+- The localhost gate is one function (`probes/red._assert_local`) and it is tested against public IPs and hostnames.
+  Every probe goes through `_http_get()` which calls it first. Keep it that way.
+- Real box with `--red`: 0 high · 5 medium · 10 low · 0 paths · vault = 5 credentials / 3 kinds (JWTs in auth.json).
+
 ## Codex task queue
 
 Take the top unclaimed task. Mark it `claimed <date>` here, then `done <date> → reviews/codex/<file>` when the report is written.
@@ -149,8 +161,15 @@ is not enough and pin it. Two directions, both matter:
 Report: `reviews/codex/YYYY-MM-DD-evasion-skills.md` with a detection matrix like C2. No `src/` edits.
 Same idea against the skills scanner: `SKILL.md` and scripts that hide `curl | sh`, network calls, secret reads, and invisible-Unicode instructions in ways a regex misses.
 
-### C4 — Windows platform adapter  `[blocked: waits for M3]`
-`src/daemonaudit/platform/windows.py`: implement `file_mode()`-equivalent semantics on top of ACLs (is the file readable/writable by users other than the owner and SYSTEM/Administrators?), plus `listening_sockets()` verification on Windows. Interface is fixed by `platform/base.py`; report anything the interface can't express rather than changing it.
+### C4 — Windows platform adapter  `[implementation done 2026-08-27 → reviews/codex/2026-08-27-windows-adapter.md · native Windows verification pending]`  (M3 shipped — go; run this on the Windows/PowerShell box, not WSL)
+`src/daemonaudit/platform/base.py` → new `WindowsPlatform` (replace the stub). Interface is fixed; report anything it can't express rather than changing it.
+Scope, in order:
+1. `file_mode()` semantics on ACLs: `FileMode.other_readable/other_writable/group_*` should mean "a principal other than the owner, SYSTEM and Administrators has that right". Use `ctypes`/`win32security` only if stdlib can't — prefer stdlib (`subprocess icacls` parsing is acceptable as a first cut if documented). `posix_modes = True` once this works, so PERM-* checks run.
+2. `read_nofollow()`: open with `FILE_FLAG_OPEN_REPARSE_POINT` semantics or reject reparse points — never follow a junction/symlink at the final component.
+3. `stat_cmd()`: a PowerShell one-liner printing the ACL (`(Get-Acl <path>).AccessToString`).
+4. `listening_sockets()` / `process_env()` / `children()`: verify psutil behaves; document what needs elevation.
+5. Hermes home on Windows is `%USERPROFILE%\.hermes` — confirm `discover/hermes.py` finds it (`Path.home()` should).
+Tests: `tests/test_windows.py`, skipped unless `sys.platform == "win32"`. Run the full suite on the Windows box and paste the summary line into the report. Branch `codex/windows-adapter`. Report: `reviews/codex/YYYY-MM-DD-windows-adapter.md`.
 
 ## Claude's queue (for the record)
 - M2 checks, in the order listed in the milestone table; `NET-001` listening sockets first because it's the only remote-position check and the report is lopsided without it.

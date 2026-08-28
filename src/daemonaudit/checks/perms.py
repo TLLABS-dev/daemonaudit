@@ -55,6 +55,7 @@ def vault_permissions(target: Target, plat: Platform) -> CheckOutput:
                 fix=f"chmod 600 {q(path)}",
                 verify_cmd=f"{plat.stat_cmd(path)}  # expect 600",
                 evidence=[f"mode {mode.octal}"],
+                tags=["secret:vault-readable"] if (is_vault and mode.other_readable) else [],
             )
         )
 
@@ -160,6 +161,7 @@ def backup_weaker_than_original(target: Target, plat: Platform) -> CheckOutput:
                 fix=f"chmod 600 {q(bak)}  # or delete it once you're sure you don't need it",
                 verify_cmd=plat.stat_cmd(bak),
                 evidence=[f"backup mode {bmode.octal}, original mode {omode_str}"] + [f"contains {k}" for k in kinds],
+                tags=["secret:sprawl:readable"] if (hits and bmode.other_readable) else [],
             )
         )
     return out

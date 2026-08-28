@@ -116,6 +116,7 @@ def secrets_outside_vault(target: Target, plat: Platform) -> CheckOutput:
                     for r, via in redacted[:10]
                 ],
                 secrets=[r for r, _ in redacted],
+                tags=["secret:sprawl"] + (["secret:sprawl:readable"] if exposed else []),
             )
         )
     if inspected == 0 and out.coverage_notes:

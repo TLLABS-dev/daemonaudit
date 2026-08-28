@@ -128,6 +128,23 @@ Codex: read these before C1/C2 — they are the known state, don't re-report the
   Every probe goes through `_http_get()` which calls it first. Keep it that way.
 - Real box with `--red`: 0 high · 5 medium · 10 low · 0 paths · vault = 5 credentials / 3 kinds (JWTs in auth.json).
 
+## Releasing to PyPI (Trusted Publishing)
+The `publish` job in `.github/workflows/ci.yml` runs on any `v*` tag and publishes via OIDC —
+no API token is stored anywhere. One-time setup on pypi.org, then every `vX.Y.Z` tag publishes.
+
+**One-time (user, on pypi.org, logged in):** Account → *Publishing* → *Add a pending publisher*:
+- PyPI Project Name: `daemonaudit`
+- Owner: `TLLABS-dev`   Repository: `daemonaudit`
+- Workflow name: `ci.yml`   Environment: `pypi`
+
+Then in the GitHub repo: Settings → Environments → **New environment** named `pypi` (no secrets needed).
+To publish v0.1.0 after that: re-push the tag so CI re-runs with the publish job present —
+`git push origin :refs/tags/v0.1.0 && git push origin v0.1.0` (delete + repush). Future releases:
+bump `version` in pyproject.toml + `__init__.py`, tag `vX.Y.Z`, push the tag.
+
+Token fallback (if Trusted Publishing is ever a problem): add a `PYPI_API_TOKEN` repo secret and
+give the publish step `with: { password: ${{ secrets.PYPI_API_TOKEN }} }`. Trusted Publishing is preferred.
+
 ## Lessons from M4 (2026-08-27)
 - **Process attribution was too loose.** `find_processes("hermes_cli")` substring-matches any command
   line mentioning the string — including daemonaudit's own shell wrapper. Discovery now requires a

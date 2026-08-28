@@ -161,7 +161,7 @@ is not enough and pin it. Two directions, both matter:
 Report: `reviews/codex/YYYY-MM-DD-evasion-skills.md` with a detection matrix like C2. No `src/` edits.
 Same idea against the skills scanner: `SKILL.md` and scripts that hide `curl | sh`, network calls, secret reads, and invisible-Unicode instructions in ways a regex misses.
 
-### C4 — Windows platform adapter  `[implementation done 2026-08-27 → reviews/codex/2026-08-27-windows-adapter.md · native Windows verification pending]`  (M3 shipped — go; run this on the Windows/PowerShell box, not WSL)
+### C4 — Windows platform adapter  `[merged 2026-08-27 — native verification pending → reviews/codex/2026-08-27-windows-adapter.md · reviews/claude/2026-08-27-windows-adapter.md]`
 `src/daemonaudit/platform/base.py` → new `WindowsPlatform` (replace the stub). Interface is fixed; report anything it can't express rather than changing it.
 Scope, in order:
 1. `file_mode()` semantics on ACLs: `FileMode.other_readable/other_writable/group_*` should mean "a principal other than the owner, SYSTEM and Administrators has that right". Use `ctypes`/`win32security` only if stdlib can't — prefer stdlib (`subprocess icacls` parsing is acceptable as a first cut if documented). `posix_modes = True` once this works, so PERM-* checks run.

@@ -145,6 +145,39 @@ bump `version` in pyproject.toml + `__init__.py`, tag `vX.Y.Z`, push the tag.
 Token fallback (if Trusted Publishing is ever a problem): add a `PYPI_API_TOKEN` repo secret and
 give the publish step `with: { password: ${{ secrets.PYPI_API_TOKEN }} }`. Trusted Publishing is preferred.
 
+## v0.2 backlog — gaps from the 2026-08-27 self-audit (manual audit of the real WSL2 ~/.hermes)
+
+Found by a hand audit that daemonaudit's 21 checks missed. Ranked; the first two are correctness, not features.
+
+1. **[correctness] Traversal-aware exposure.** PERM-001 calls a 644 file "readable by any user on the host"
+   from the file's own mode alone. On the real box `~/.hermes` is 700 and `/home/tl` is 750, so no other
+   user can reach those files — the finding is a false over-report. Fix: walk the parent-directory chain;
+   a file is only "other-reachable" if every ancestor grants o+x (and "group-reachable" likewise). Downgrade/
+   reword when the chain blocks it. Keep a lower-severity "defense-in-depth: loosen the dir and this leaks" note.
+2. **[coverage] Scan the framework's own executable tree.** `exclude_root_dirs={hermes-agent,bin}` means the
+   venv, interpreter, and bin/ tools — the code that runs AS the daemon — are never permission-checked. Real
+   box had `hermes-agent/venv/.lock` world-writable (666) and venv bins group-writable (775). Add a dedicated
+   check for writable-by-others files *inside* the excluded exec trees (writable code = code execution as you),
+   separate from the user-data PERM checks, so we don't re-introduce the __pycache__ noise into PERM-003.
+3. **[root-cause] umask + systemd hardening.** The daemon runs `Umask 0002` — the single cause of every 644/775
+   finding. Report the root cause once, not N symptoms, and point at the fix location: `UMask=0077` in the
+   `hermes-gateway.service` unit. Also add a check that the unit has hardening directives (UMask, ProtectHome,
+   ProtectSystem, NoNewPrivileges, PrivateTmp) and runs as a non-root user. Today we only grep units for --yolo.
+4. **[category] Dependency CVE scan.** daemonaudit does no dependency vuln scanning; ADV-001 only reads Hermes's
+   own advisory cache. Add an optional `pip-audit`-style pass over the venv (offline DB or vendored advisory set
+   to preserve zero-egress; or clearly gate a network mode behind a flag that defaults off).
+5. **[nuance] WSL loopback caveat.** NET-001 labels a 127.0.0.1 listener "safe, loopback-only." True in WSL2 NAT
+   mode (the real box: eth0 172.20.x), but WSL *mirrored* networking shares localhost with Windows, so a loopback
+   bind is reachable by Windows processes. Detect WSL + networking mode (/proc, .wslconfig) and add the caveat.
+6. **[scope] Secrets the agent can reach outside HERMES_HOME.** With `backend: local` the agent runs as you and
+   can read `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.docker/config.json`, and provider keys exported
+   in shell rc. daemonaudit only scans under HERMES_HOME. Add an opt-in host-secrets sweep of these well-known
+   locations (report presence + perms, never values). Real box was clean (only known_hosts), but the blind spot is real.
+
+Note (tool was right, keep as a regression anchor): the self-audit's naive grep "found" ghp_/xoxb-/xapp- in .env
+that were actually comments/placeholders; the placeholder filter (C2) correctly ignored them and RED-003's vault
+inventory was accurate. Don't "fix" detection toward matching that grep.
+
 ## Lessons from M4 (2026-08-27)
 - **Process attribution was too loose.** `find_processes("hermes_cli")` substring-matches any command
   line mentioning the string — including daemonaudit's own shell wrapper. Discovery now requires a

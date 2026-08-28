@@ -128,6 +128,18 @@ Codex: read these before C1/C2 — they are the known state, don't re-report the
   Every probe goes through `_http_get()` which calls it first. Keep it that way.
 - Real box with `--red`: 0 high · 5 medium · 10 low · 0 paths · vault = 5 credentials / 3 kinds (JWTs in auth.json).
 
+## Lessons from C4 native verification (2026-08-27)
+- **There is no Hermes on the Windows side of TLlabs.** No `%USERPROFILE%\.hermes`, no `HERMES_HOME`, no process.
+  The "PowerShell" Hermes is the WSL install reached through Windows Terminal. `daemonaudit scan` on native
+  Windows correctly exits 3. Real installs to audit: WSL2 and the Mac. The Windows box's job is the adapter.
+- Windows Python defaults to cp1252 for `read_text()/write_text()`. Every test touching a non-ASCII fixture
+  must pass `encoding="utf-8"`. The scanner itself reads bytes and is unaffected.
+- PowerShell non-terminating errors exit 0. Any generated PowerShell verify command needs `-ErrorAction Stop`.
+- WSL can drive the Windows side (`powershell.exe` from bash); a fresh WSL session is needed to see PATH
+  changes made on Windows after the session started — use full interpreter paths instead.
+- Follow-up: the `posix_only` markers now skip PERM/SEC tests on Windows even though `posix_modes=True`;
+  port those fixtures to `icacls` so the checks are exercised natively (v0.2, with the richer principal model).
+
 ## Codex task queue
 
 Take the top unclaimed task. Mark it `claimed <date>` here, then `done <date> → reviews/codex/<file>` when the report is written.
@@ -161,7 +173,7 @@ is not enough and pin it. Two directions, both matter:
 Report: `reviews/codex/YYYY-MM-DD-evasion-skills.md` with a detection matrix like C2. No `src/` edits.
 Same idea against the skills scanner: `SKILL.md` and scripts that hide `curl | sh`, network calls, secret reads, and invisible-Unicode instructions in ways a regex misses.
 
-### C4 — Windows platform adapter  `[merged 2026-08-27 — native verification pending → reviews/codex/2026-08-27-windows-adapter.md · reviews/claude/2026-08-27-windows-adapter.md]`
+### C4 — Windows platform adapter  `[done 2026-08-27 — natively verified: 64 passed / 17 skipped on Windows 3.12.10]`
 `src/daemonaudit/platform/base.py` → new `WindowsPlatform` (replace the stub). Interface is fixed; report anything it can't express rather than changing it.
 Scope, in order:
 1. `file_mode()` semantics on ACLs: `FileMode.other_readable/other_writable/group_*` should mean "a principal other than the owner, SYSTEM and Administrators has that right". Use `ctypes`/`win32security` only if stdlib can't — prefer stdlib (`subprocess icacls` parsing is acceptable as a first cut if documented). `posix_modes = True` once this works, so PERM-* checks run.

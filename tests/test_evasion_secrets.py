@@ -20,8 +20,8 @@ FIXTURES = Path(__file__).parent / "fixtures" / "evasion"
 def _hits(name: str, transform: str = "text") -> list[tuple[str, str]]:
     path = FIXTURES / name
     if transform == "sqlite-page":
-        return find_secrets(base64.b64decode(path.read_text().strip()))
-    return find_secrets(path.read_text())
+        return find_secrets(base64.b64decode(path.read_text(encoding="utf-8").strip()))
+    return find_secrets(path.read_text(encoding="utf-8"))
 
 
 def _assert_hit(name: str, kind: str, raw: str, transform: str = "text") -> None:

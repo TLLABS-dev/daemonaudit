@@ -29,7 +29,7 @@ def _scan(tmp_path: Path, skill_name: str, *, vendor: str | None = None, modify:
         vendor_path = home / HERMES_LAYOUT.bundled_skills_dir / "fixture" / skill_name
         shutil.copytree(FIXTURES / skill_name, vendor_path)
         if modify:
-            (installed / "SKILL.md").write_text((installed / "SKILL.md").read_text() + "\nModified locally.\n")
+            (installed / "SKILL.md").write_text((installed / "SKILL.md").read_text(encoding="utf-8") + "\nModified locally.\n", encoding="utf-8")
     target = Target("hermes", home, layout=HERMES_LAYOUT)
     return skills(target, get_platform()).findings
 

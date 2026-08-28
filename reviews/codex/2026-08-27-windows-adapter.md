@@ -27,7 +27,12 @@ Implemented:
 - Windows PowerShell 5.1 live read-only probe against `C:\Windows\win.ini`:
   owner and 5 ACEs parsed successfully; a nonexistent path raised `OSError`
   rather than returning a clean ACL.
-- Native Windows pytest summary: **not available in this session**. The only
+- **Native Windows pytest (added by Claude after installing Python 3.12.10 via winget, 2026-08-27):
+  `64 passed, 17 skipped in 7.05s`** — all five `test_windows.py` tests pass. The 17 skips are
+  `posix_only` tests. Three Windows-only defects surfaced and were fixed in the same run: two tests
+  used locale-default encoding (cp1252) for UTF-8 fixtures; `stat_cmd()` exited 0 on a missing path
+  because `Get-Acl` errors are non-terminating — now `-ErrorAction Stop`.
+- Native Windows pytest summary (Codex session): **not available in this session**. The only
   discovered `C:\Users\TL\...\WindowsApps\python.exe` is an uninstalled Store
   alias. The five Windows tests therefore remain skipped under WSL. C4 must not
   be considered fully verified until these tests run with a native win32 Python.

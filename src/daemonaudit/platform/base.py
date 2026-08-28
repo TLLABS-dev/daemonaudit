@@ -342,7 +342,8 @@ class WindowsPlatform(Platform):
 
     def stat_cmd(self, path: Path) -> str:
         literal = self._ps_literal(str(path))
-        return f'powershell.exe -NoProfile -Command "(Get-Acl -LiteralPath {literal}).AccessToString"'
+        # -ErrorAction Stop: a missing path must exit non-zero so the command is CI-usable.
+        return f'powershell.exe -NoProfile -Command "(Get-Acl -LiteralPath {literal} -ErrorAction Stop).AccessToString"'
 
 
 def get_platform() -> Platform:

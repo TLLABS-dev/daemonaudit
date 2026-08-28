@@ -1,0 +1,4 @@
+# FAKE bearer value folded by YAML into one logical credential.
+authorization: >-
+  Bearer FAKEabcde12345
+  FAKEabcde67890

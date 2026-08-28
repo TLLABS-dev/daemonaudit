@@ -1,0 +1,3 @@
+# FAKE credentials encoded as storage wrappers; decode before use.
+openai_key_base64: c2stcHJvai1GQUtFYWJjZGUxMjM0NUZBS0VhYmNkZTY3ODkw
+anthropic_key_hex: 736b2d616e742d46414b456162636465313233343546414b4561626364653637383930

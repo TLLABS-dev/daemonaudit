@@ -57,8 +57,11 @@ def _assert_local(ip: str) -> str:
     raise NotLocal(f"refusing to probe {ip}: not an address of this host")
 
 
-def _http_get(ip: str, port: int, path: str) -> tuple[int | None, str]:
-    """(status, first header line). status None on connect/timeout failure."""
+def _http_get(ip: str, port: int, path: str) -> tuple[int | None, str, str]:
+    """(status, first header line, kind). status None on connect/timeout failure.
+
+    kind is "html" when the body is an HTML document (a single-page UI shell served for any
+    path is not API access), else "data"."""
     addr = _assert_local(ip)  # the gate — never bypass
     fam = socket.AF_INET6 if ":" in addr else socket.AF_INET
     try:
@@ -73,12 +76,14 @@ def _http_get(ip: str, port: int, path: str) -> tuple[int | None, str]:
                     break
                 data += chunk
     except OSError as e:
-        return None, str(e)
-    line = data.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+        return None, str(e), "data"
+    head, _, body = data.partition(b"\r\n\r\n")
+    line = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
     parts = line.split(" ", 2)
+    html = b"content-type: text/html" in head.lower() or body.lstrip()[:15].lower().startswith((b"<!doctype html", b"<html"))
     if len(parts) >= 2 and parts[0].startswith("HTTP/") and parts[1].isdigit():
-        return int(parts[1]), line
-    return None, line[:80] or "no HTTP response"
+        return int(parts[1]), line, "html" if html else "data"
+    return None, line[:80] or "no HTTP response", "data"
 
 
 @check("RED-001", "Probe: daemon HTTP services answer without authentication", Position.REMOTE, mode="red", frameworks=("hermes", "openclaw"))
@@ -96,20 +101,27 @@ def unauth_http(target: Target, plat: Platform) -> CheckOutput:
         out.note("no daemon TCP listeners to probe" + ("" if target.pids else " (daemon not running)"))
         return out
     paths = tuple(dict.fromkeys(lay.http_probe_paths + lay.http_ui_paths))
-    for ip, port in sorted(targets, key=lambda t: t[1]):
+    # One probe per port: a service bound to both 127.0.0.1 and ::1 is one service.
+    by_port: dict[int, str] = {}
+    for ip, port in sorted(targets, key=lambda t: (t[1], ":" in t[0], t[0])):
+        by_port.setdefault(port, ip)
+    for port, ip in sorted(by_port.items()):
         try:
             results = {path: _http_get(ip, port, path) for path in paths}
         except NotLocal as e:
             out.note(str(e))
             continue
-        statuses = {p: st for p, (st, _) in results.items() if st is not None}
+        statuses = {p: st for p, (st, _, _) in results.items() if st is not None}
         if not statuses:
             out.note(f"{ip}:{port} did not speak HTTP ({results[paths[0]][1]})")
             continue
-        unauth_paths = [p for p, st in statuses.items() if 200 <= st < 300 and p not in lay.http_ui_paths]
-        ui_paths = [p for p, st in statuses.items() if 200 <= st < 300 and p in lay.http_ui_paths]
+        kinds = {p: k for p, (_, _, k) in results.items()}
+        # A 2xx that is an HTML document is the web UI shell (single-page apps answer every path
+        # with index.html); only a non-HTML 2xx on an API path is content served without auth.
+        unauth_paths = [p for p, st in statuses.items() if 200 <= st < 300 and p not in lay.http_ui_paths and kinds[p] != "html"]
+        ui_paths = [p for p, st in statuses.items() if 200 <= st < 300 and (p in lay.http_ui_paths or kinds[p] == "html")]
         auth_paths = [p for p, st in statuses.items() if st in (401, 403, 407)]
-        ev = [f"GET {p} → {st}" for p, st in statuses.items()]
+        ev = [f"GET {p} → {st}" + (" (HTML UI shell)" if kinds[p] == "html" and 200 <= st < 300 else "") for p, st in statuses.items()]
         if unauth_paths:
             out.findings.append(Finding(
                 "RED-001", f"Port {port} answers {', '.join(unauth_paths)} with 2xx and no credentials",
@@ -129,11 +141,11 @@ def unauth_http(target: Target, plat: Platform) -> CheckOutput:
             ))
         elif ui_paths:
             out.findings.append(Finding(
-                "RED-001", f"Port {port} serves its web UI shell to anonymous clients; API paths did not answer 2xx",
+                "RED-001", f"Port {port} serves its web UI shell to anonymous clients; no API path served data without credentials",
                 Severity.INFO, Position.REMOTE, f"{ip}:{port}",
-                "The static UI is served to anyone (that is how single-page apps work); the API behind it did not serve content to an "
-                "anonymous GET. This probe cannot exercise the WebSocket/device-pairing handshake, so the policy checks (POL-005) are "
-                "the authority on whether that UI is actually gated.",
+                "The static UI is served to anyone — and a single-page app answers every unknown path with the same HTML, which is not API "
+                "access. No probed path returned non-HTML content to an anonymous GET. This probe cannot exercise the WebSocket/device-pairing "
+                "handshake, so the policy checks (POL-005) are the authority on whether that UI is actually gated.",
                 "Keep the listener on loopback and the gateway auth mode set; see POL-005.", None, ev, tags=["net:ui:anon"],
             ))
         else:

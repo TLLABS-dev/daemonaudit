@@ -291,3 +291,43 @@ def test_two_frameworks_one_report(oc_home, hermes_home):
     fws = {x.framework for x in r.results}
     assert fws == {"openclaw", "hermes"}
     assert "<th>target</th>" in render_html(r)
+
+
+def _server(status: int, content_type: str, body: bytes):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class H(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+@posix_only
+def test_red001_spa_shell_is_not_unauthenticated_api(oc_home):
+    """A single-page UI answers every path with index.html (200 text/html) — that is the UI shell,
+    not API access. Non-HTML 2xx on an API path is. One listener on both loopback families is one probe."""
+    spa = _server(200, "text/html; charset=utf-8", b"<!doctype html><html><body>ui</body></html>")
+    api = _server(200, "application/json", b'{"data":[]}')
+    try:
+        socks = [{"ip": "127.0.0.1", "port": spa.server_port, "pid": 4242}, {"ip": "::1", "port": spa.server_port, "pid": 4242},
+                 {"ip": "127.0.0.1", "port": api.server_port, "pid": 4242}]
+        r = _run(oc_home, OcPlat(oc_home, sockets=socks), red=True)
+        fs = _by(r, "RED-001")
+        shell = [f for f in fs if str(spa.server_port) in f.title]
+        assert len(shell) == 1 and shell[0].severity == Severity.INFO and "UI shell" in shell[0].title
+        assert any("(HTML UI shell)" in e for e in shell[0].evidence)
+        leak = [f for f in fs if str(api.server_port) in f.title]
+        assert len(leak) == 1 and leak[0].severity == Severity.HIGH and "net:unauth:verified" in leak[0].tags
+    finally:
+        spa.shutdown(); api.shutdown()

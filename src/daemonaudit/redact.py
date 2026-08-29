@@ -53,6 +53,8 @@ PATTERNS: list[Pattern] = [
     Pattern("anthropic-api-key", re.compile(r"(?<![A-Za-z0-9])sk-ant-[A-Za-z0-9_\-]{20,}"), structural=False),
     Pattern("openrouter-api-key", re.compile(r"(?<![A-Za-z0-9])sk-or-v1-[a-f0-9]{40,}")),
     Pattern("openai-api-key", re.compile(r"(?<![A-Za-z0-9])sk-(?:proj-|svcacct-)?[A-Za-z0-9_\-]{20,}"), structural=False),
+    Pattern("xai-api-key", re.compile(r"(?<![A-Za-z0-9])xai-[A-Za-z0-9]{40,}"), structural=False),
+    Pattern("groq-api-key", re.compile(r"(?<![A-Za-z0-9])gsk_[A-Za-z0-9]{40,}"), structural=False),
     Pattern("github-token", re.compile(r"(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{30,}"), structural=False),
     Pattern("github-fine-grained-pat", re.compile(r"(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{22,}"), structural=False),
     Pattern("slack-app-token", re.compile(r"(?<![A-Za-z0-9])xapp-\d-[A-Z0-9]+-\d+-[a-f0-9]{40,}")),
@@ -110,7 +112,7 @@ def _is_placeholder(value: str) -> bool:
     return any(w in low for w in _PLACEHOLDER_SUBSTRINGS)
 
 
-_PREFIX = re.compile(r"^(sk-ant-|sk-or-v1-|sk-proj-|sk-svcacct-|sk-|gh[pousr]_|github_pat_|xox[abprs]-)")
+_PREFIX = re.compile(r"^(sk-ant-|sk-or-v1-|sk-proj-|sk-svcacct-|sk-|gh[pousr]_|github_pat_|xox[abprs]-|xai-|gsk_)")
 
 
 def _looks_random_prefixed(value: str) -> bool:

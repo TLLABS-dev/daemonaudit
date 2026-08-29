@@ -40,9 +40,15 @@ def scan_file(plat: Platform, path: Path) -> tuple[list[Hit], str | None]:
 def _candidate_files(target: Target):
     home, lay = target.home, target.layout
     seen: set[Path] = set()
+    vault_files = {home / v for v in lay.vault_files}
+    vault_dirs = [home / d for d in lay.vault_dirs]
+
+    def in_vault(p: Path) -> bool:
+        return p in vault_files or any(p.is_relative_to(d) for d in vault_dirs)
+
     for name in lay.sprawl_paths:
         for p in walk_files(home / name, lay.exclude_dirs):
-            if p not in seen:
+            if p not in seen and not in_vault(p):
                 seen.add(p)
                 yield p
     for p in walk_files(home, lay.exclude_dirs, max_depth=2, exclude_root=lay.exclude_root_dirs):
@@ -51,7 +57,7 @@ def _candidate_files(target: Target):
             yield p
 
 
-@check("SEC-001", "Credentials found outside the vault", Position.LOCAL)
+@check("SEC-001", "Credentials found outside the vault", Position.LOCAL, frameworks=("hermes", "openclaw"))
 def secrets_outside_vault(target: Target, plat: Platform) -> CheckOutput:
     home, lay = target.home, target.layout
     out = CheckOutput()

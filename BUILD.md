@@ -12,7 +12,8 @@ platform adapter. Both read `AGENTS.md` first. Humans read this file to see wher
 | 2 | NET-001/002 listeners + unix sockets; POL-001..010 (yolo/exec-ask, approvals, sandbox, allow-all users, API server, webhooks/dashboard, debug leaks, SSRF/tirith/project plugins, env passthrough, MCP literal secrets); SKILL-001 (8 categories, bundled-skill detection); ADV-001 (local update cache + acked advisories) | **done 2026-08-27** (pending Codex C3) |
 | 3 | RED-001 unauth HTTP probe (localhost gate, hard-fail otherwise), RED-002 exec-time process env, RED-003 vault blast radius; `chain/rules.py` (9 rules, tag-based, foothold floor) → attack paths with kill-hop + per-kind blast radius table; `info` status; exit codes ignore INFO | **done 2026-08-27** (pending Codex C4) |
 | 4 | `--html` self-contained report; mascot SVG + `assets/demo-report.svg` screenshot from `scripts/demo_home.py`; LICENSE (MIT); GitHub Actions CI on Linux/macOS/Windows × py3.10/3.12 with a demo smoke-scan + build; README; version 0.1.0 + tag | **done 2026-08-27** |
-| v0.2 | Windows ACL adapter, canary-injection probe, OpenClaw + generic MCP adapters, local-Ollama semantic skill review, guided remediation with rollback, `dir_fd`-relative walking for hostile trees, scrub-only pattern set broader than finding patterns | |
+| 5 | **OpenClaw adapter** (v0.2.0): `discover/openclaw.py` + `openclaw_config.py` (JSON5 + `$include` + `.env`), shared `discover/settings.py` with per-framework dispatch, `Layout` grown to carry skill roots / context files / ports / probe paths, generic checks opened to both frameworks, `checks/policy_openclaw.py` (POL-001..010 + ADV-001 with the same ids and tags), SKILL-001 multi-root + `metadata.openclaw.requires.env`, xAI/Groq key kinds, `--home` framework recognition, both daemons in one report (`CheckResult.framework`, target column), OpenClaw demo home in CI, `tests/test_openclaw.py` (11 tests) | **done 2026-08-29** (pending Codex C5) |
+| next | generic MCP adapter, traversal-aware exposure (#1 below), exec-tree check (#2), canary-injection probe, local-Ollama semantic skill review, guided remediation with rollback, `dir_fd`-relative walking for hostile trees, scrub-only pattern set broader than finding patterns | |
 
 ## Threat model (what every check maps to)
 - **remote** — unauthenticated, on the network: exposed gateway/dashboard/API, no auth, default tokens
@@ -203,6 +204,32 @@ inventory was accurate. Don't "fix" detection toward matching that grep.
 - Follow-up: the `posix_only` markers now skip PERM/SEC tests on Windows even though `posix_modes=True`;
   port those fixtures to `icacls` so the checks are exercised natively (v0.2, with the richer principal model).
 
+## Lessons from M5 — the OpenClaw adapter (2026-08-29)
+- **Same id, per-framework implementation.** POL-001 means "approval bypassed" on both frameworks; the registry now allows one
+  implementation per framework for an id (never two for the same framework). Chain rules never changed: tags are the contract.
+- **OpenClaw's config is JSON5 and mid-migration.** `openclaw.json` allows comments/trailing commas/unquoted keys (`discover/_json5.py`,
+  strict JSON first, normaliser on failure — no new dependency). The 2026.7 release is moving `auth-profiles.json`, `exec-approvals.json`,
+  `devices/paired.json`, `update-check.json` into `state/openclaw.sqlite`; the layout lists both the legacy files and the DB, and
+  ADV-001 says honestly that staleness is not assessed when the cache file is gone.
+- **The vault can live inside a sprawl path.** `agents/<id>/agent/auth-profiles.json` sits under `agents/`, which SEC-001 walks for
+  transcripts. SEC-001 now skips anything in `vault_files`/`vault_dirs` — otherwise the vault reports itself as sprawl.
+- **A 2xx is not always a finding.** The gateway serves its Control UI at `/` and `/health` to anyone by design; RED-001 takes
+  `Layout.http_ui_paths` and reports those as INFO ("UI shell served; policy checks are the authority") instead of HIGH. Real API paths
+  (`/v1/models`, `/tools/invoke`, `/metrics`) are still probed for anonymous 2xx.
+- **The no-approval default is graded MEDIUM, not HIGH.** OpenClaw ships `tools.exec.security=full, ask=off` and documents it as the
+  trusted-single-operator default; daemonaudit reports it (with "(default)" in the evidence) at MEDIUM and only HIGH when set explicitly.
+  Same reasoning as Hermes POL-003 on `terminal.backend: local`. `exec-approvals.json` can only tighten — mirrored in `_scopes()`.
+- **Cross-check against the vendor's audit.** On the real box `openclaw security audit` reported `gateway.loopback_no_auth` (critical) +
+  `gateway.http.no_auth`; daemonaudit's POL-005 said the same thing (HIGH, tag `net:unauth`) and additionally flagged the 644 session
+  transcripts that the vendor audit did not. Findings name the matching OpenClaw checkId in `why` so users can map the two.
+- **Real box (fresh OpenClaw 2026.7.1-2, not running):** 1 high (gateway has no auth configured at all — onboarding was skipped) ·
+  3 medium (session jsonl 644, exec full/off default, sandbox off) · 0 low · 1 attack path (local unauth service → tools → vault). Zero
+  check errors; the Hermes scan on the same box was unchanged.
+- **Bundled skills live in the npm package**, not under the home: `Layout.bundled_skills_dir` may now be absolute (pathlib joins an
+  absolute path by replacing the base). Package root is found from a running gateway's cmdline, `$OPENCLAW_PACKAGE_ROOT`, or `which openclaw`.
+- **The gateway log is outside the home** (`/tmp/openclaw/openclaw-*.log` by default). Discovery lists the last seven as `private_files`
+  so PERM-001 grades them; nothing else in the tool looks outside the home.
+
 ## Codex task queue
 
 Take the top unclaimed task. Mark it `claimed <date>` here, then `done <date> → reviews/codex/<file>` when the report is written.
@@ -235,6 +262,19 @@ is not enough and pin it. Two directions, both matter:
    finding. Note `_is_bundled()` downgrades vendor-identical files; test that a modified vendor file is NOT downgraded.
 Report: `reviews/codex/YYYY-MM-DD-evasion-skills.md` with a detection matrix like C2. No `src/` edits.
 Same idea against the skills scanner: `SKILL.md` and scripts that hide `curl | sh`, network calls, secret reads, and invisible-Unicode instructions in ways a regex misses.
+
+### C5 — OpenClaw adapter review  `[open]`
+Review `src/daemonaudit/discover/openclaw.py`, `openclaw_config.py`, `_json5.py`, `checks/policy_openclaw.py` and `tests/test_openclaw.py`
+against AGENTS.md. Same brief as C1, plus:
+1. **Defaults.** Every "default" the checks assume (bind loopback, auth required, exec full/off, sandbox off, dmPolicy pairing, groupPolicy allowlist,
+   redactSensitive tools) against the bundled docs at `node_modules/openclaw/docs` (2026.7.1-2). A wrong default is a false pass or a cry-wolf.
+2. **JSON5 loader.** Break `_json5.loads()`: strings containing `//`, `/*`, `:`; unquoted keys with `$`; nested `$include` cycles; a 2 MB include.
+   The loader must fail loudly (ValueError → coverage note), never silently return `{}` as "clean".
+3. **Process attribution.** `GATEWAY_RE` + `_belongs_to()` with `--profile`, `--dev`, `OPENCLAW_STATE_DIR`, a wrapper (`OPENCLAW_WRAPPER`), bun.
+4. **False positives on a default install.** Build a home with `openclaw onboard`-shaped config (token auth, loopback, pairing) and make sure only
+   the graded-MEDIUM defaults appear. Vendor skills from the npm package must be `(bundled)`.
+5. **Redaction.** `POL-010` walks every string in the config; confirm nothing raw reaches evidence (the fp/display path), including SecretRef objects.
+Output: `reviews/codex/YYYY-MM-DD-openclaw-review.md`. Do not edit `src/`.
 
 ### C4 — Windows platform adapter  `[done 2026-08-27 — natively verified: 64 passed / 17 skipped on Windows 3.12.10]`
 `src/daemonaudit/platform/base.py` → new `WindowsPlatform` (replace the stub). Interface is fixed; report anything it can't express rather than changing it.

@@ -149,12 +149,14 @@ class CheckResult:
     status: str
     findings: list[Finding] = field(default_factory=list)
     note: str | None = None
+    framework: str | None = None  # which target this result belongs to (a box can run more than one daemon)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "check_id": self.check_id,
             "title": self.title,
             "status": self.status,
+            "framework": self.framework,
             "note": self.note,
             "findings": [f.to_dict() for f in self.findings],
         }
@@ -176,7 +178,15 @@ class Layout:
     backup_markers: tuple[str, ...] = (".bak", "~", ".orig", ".old")
     transcript_hints: tuple[str, ...] = ()
     preferred_vault: str = ".env"  # where the fix text tells people to put credentials
-    bundled_skills_dir: str | None = None  # relative to home: vendor copy of shipped skills, if any
+    bundled_skills_dir: str | None = None  # vendor copy of shipped skills (relative to home, or absolute)
+    skills_dirs: list[str] = field(default_factory=lambda: ["skills"])  # roots SKILL-001 walks (relative to home, or absolute)
+    context_files: list[str] = field(default_factory=lambda: ["SOUL.md", "AGENTS.md", ".cursorrules"])  # agent instruction files
+    vault_basenames: set[str] = field(default_factory=lambda: {".env", "auth.json"})  # what "asking for the vault" looks like in a skill
+    default_ports: dict[str, int] = field(default_factory=dict)  # well-known listener ports, name → port
+    http_probe_paths: tuple[str, ...] = ("/", "/health")  # RED-001 GETs these; a 2xx means "served without auth"
+    http_ui_paths: tuple[str, ...] = ()  # paths that legitimately serve a static UI shell to anyone (2xx is not a finding)
+    process_needle: str = ""  # substring that pre-filters candidate daemon processes
+    display_name: str = "the daemon"  # how finding text names the framework
 
     def is_backup(self, name: str) -> bool:
         return any(m in name if m.startswith(".") else name.endswith(m) for m in self.backup_markers)

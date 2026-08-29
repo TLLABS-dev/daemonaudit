@@ -42,8 +42,11 @@ CHECKS: list[Check] = []
 
 def check(id: str, title: str, position: Position, mode: str = "blue", frameworks: tuple[str, ...] = ("hermes",)):
     def deco(fn: CheckFn) -> CheckFn:
-        if any(c.id == id for c in CHECKS):
-            raise RuntimeError(f"duplicate check id {id}")
+        # One id means one class of weakness. A framework may carry its own implementation,
+        # but two implementations must never both apply to the same framework.
+        for c in CHECKS:
+            if c.id == id and set(c.frameworks) & set(frameworks):
+                raise RuntimeError(f"duplicate check id {id} for {sorted(set(c.frameworks) & set(frameworks))}")
         CHECKS.append(Check(id=id, title=title, position=position, mode=mode, frameworks=frameworks, fn=fn))
         return fn
 
@@ -56,19 +59,20 @@ def _coerce(out: "CheckOutput | list[Finding]") -> CheckOutput:
 
 def run_all(target: Target, plat: Platform, include_red: bool = False) -> list[CheckResult]:
     results: list[CheckResult] = []
+    fw = target.framework
     for c in CHECKS:
-        if target.framework not in c.frameworks:
+        if fw not in c.frameworks:
             continue
         if c.mode == "red" and not include_red:
-            results.append(CheckResult(c.id, c.title, "off", note="red-team probes are opt-in (--red)"))
+            results.append(CheckResult(c.id, c.title, "off", note="red-team probes are opt-in (--red)", framework=fw))
             continue
         try:
             out = _coerce(c.fn(target, plat))
         except (Skipped, NotSupported) as e:
-            results.append(CheckResult(c.id, c.title, "skip", note=str(e)))
+            results.append(CheckResult(c.id, c.title, "skip", note=str(e), framework=fw))
             continue
         except Exception:  # noqa: BLE001 - an error must never look like a pass
-            results.append(CheckResult(c.id, c.title, "error", note=traceback.format_exc(limit=3)))
+            results.append(CheckResult(c.id, c.title, "error", note=traceback.format_exc(limit=3), framework=fw))
             continue
         note = "; ".join(out.coverage_notes) if out.coverage_notes else None
         if out.findings and all(f.severity.value == "info" for f in out.findings):
@@ -79,7 +83,7 @@ def run_all(target: Target, plat: Platform, include_red: bool = False) -> list[C
             status = "incomplete"
         else:
             status = "pass"
-        results.append(CheckResult(c.id, c.title, status, findings=out.findings, note=note))
+        results.append(CheckResult(c.id, c.title, status, findings=out.findings, note=note, framework=fw))
     return results
 
 
@@ -90,4 +94,5 @@ def load_builtin_checks() -> None:
     import daemonaudit.checks.policy  # noqa: F401
     import daemonaudit.checks.skills  # noqa: F401
     import daemonaudit.checks.advisories  # noqa: F401
+    import daemonaudit.checks.policy_openclaw  # noqa: F401
     import daemonaudit.probes.red  # noqa: F401

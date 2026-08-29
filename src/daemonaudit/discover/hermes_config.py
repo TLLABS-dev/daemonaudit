@@ -1,24 +1,20 @@
 """Hermes settings view: config.yaml + .env + (fallback) the audit shell's environment.
 
-Values are held in memory for policy evaluation only. Checks must never put a
-value from `.env` into a Finding — names only, or redacted displays.
+Generic machinery (dotted `get`, env lookup with source tracking, dotenv parsing)
+lives in `discover/settings.py`; this module adds what only Hermes has. Checks
+must never put a value from `.env` into a Finding — names only, or redacted displays.
 """
 
 from __future__ import annotations
 
 import json
-import os
-import re
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
 
 import yaml
 
+from daemonaudit.discover.settings import SECRET_NAME, Settings, load_settings, parse_dotenv, read_text_nofollow  # noqa: F401 - re-exported for checks
 from daemonaudit.model import Target
-from daemonaudit.platform import NotSupported, Platform
-
-TRUTHY = {"1", "true", "yes", "on"}
+from daemonaudit.platform import Platform
 
 # platform → (env var that means "configured", per-platform allowed-users var, per-platform allow-all var)
 PLATFORM_ENV = {
@@ -29,73 +25,9 @@ PLATFORM_ENV = {
     "teams": ("TEAMS_CLIENT_SECRET", "TEAMS_ALLOWED_USERS", "TEAMS_ALLOW_ALL_USERS"),
 }
 
-SECRET_NAME = re.compile(r"(?i)(API_?KEY|SECRET|TOKEN|PASSWORD|PASSWD|CREDENTIAL|PRIVATE_KEY)")
-
-
-def parse_dotenv(text: str) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        if "=" not in line:
-            continue
-        k, v = line.split("=", 1)
-        k = k.strip()
-        v = v.strip()
-        if v[:1] in ("'", '"') and v[-1:] == v[:1] and len(v) >= 2:
-            v = v[1:-1]
-        elif " #" in v:
-            v = v.split(" #", 1)[0].rstrip()
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", k):
-            out[k] = v
-    return out
-
 
 @dataclass
-class HermesSettings:
-    cfg: dict[str, Any] = field(default_factory=dict)
-    dotenv: dict[str, str] = field(default_factory=dict)
-    notes: list[str] = field(default_factory=list)  # coverage notes for checks to surface
-    home: Path = Path(".")
-
-    # --- config.yaml ---
-    def get(self, dotted: str, default: Any = None) -> Any:
-        cur: Any = self.cfg
-        for part in dotted.split("."):
-            if not isinstance(cur, dict) or part not in cur:
-                return default
-            cur = cur[part]
-        return cur
-
-    # --- env (.env first, then the shell we're running in) ---
-    def env(self, name: str) -> tuple[str | None, str | None]:
-        """(value, source) — source is '.env', 'shell' or None."""
-        if name in self.dotenv:
-            return self.dotenv[name], ".env"
-        if name in os.environ:
-            return os.environ[name], "shell"
-        return None, None
-
-    def env_set(self, name: str) -> bool:
-        v, _ = self.env(name)
-        return v is not None and v.strip() != ""
-
-    def env_truthy(self, name: str) -> bool:
-        v, _ = self.env(name)
-        return v is not None and v.strip().lower() in TRUTHY
-
-    def env_falsy(self, name: str) -> bool:
-        v, _ = self.env(name)
-        return v is not None and v.strip().lower() in {"0", "false", "no", "off"}
-
-    def env_names_matching(self, pattern: str) -> list[str]:
-        rx = re.compile(pattern)
-        names = set(self.dotenv) | set(os.environ)
-        return sorted(n for n in names if rx.search(n))
-
+class HermesSettings(Settings):
     # --- platforms ---
     def platforms_enabled(self) -> list[str]:
         out = set()
@@ -117,39 +49,41 @@ class HermesSettings:
         except (OSError, ValueError):
             return 0
 
+    # --- network facts for NET-001 / RED-001 ---
+    def service_ports(self) -> dict[str, int]:
+        from daemonaudit.discover.hermes import DEFAULT_PORTS
 
-def load_settings(target: Target, plat: Platform) -> HermesSettings:
-    cached = target.meta.get("_settings")
-    if cached is not None:
-        return cached
+        ports = dict(DEFAULT_PORTS)
+        api_port, _ = self.env("API_SERVER_PORT")
+        if api_port and api_port.isdigit():
+            ports["api_server"] = int(api_port)
+        return ports
+
+    def unauthenticated_ports(self) -> set[int]:
+        if self.env_truthy("API_SERVER_ENABLED") and not self.env_set("API_SERVER_KEY"):
+            return {self.service_ports()["api_server"]}
+        return set()
+
+    def bind_loopback_fix(self) -> str:
+        return ("Bind to 127.0.0.1 (e.g. API_SERVER_HOST=127.0.0.1) and reach it over SSH/Tailscale, "
+                "or put it behind an authenticating reverse proxy. Set API_SERVER_KEY if the API server is enabled.")
+
+    def require_auth_fix(self) -> str:
+        return "Put authentication in front of it (API_SERVER_KEY for the API server; OAuth/OIDC for the dashboard) or bind it to loopback and tunnel."
+
+
+def load_hermes_settings(target: Target, plat: Platform) -> HermesSettings:
     s = HermesSettings(home=target.home)
     cfg_path = target.home / "config.yaml"
-    try:
-        raw = plat.read_nofollow(cfg_path, 8 * 1024 * 1024)
-        loaded = yaml.safe_load(raw.decode("utf-8", "replace"))
-        s.cfg = loaded if isinstance(loaded, dict) else {}
-    except FileNotFoundError:
-        s.notes.append("config.yaml not found (defaults assumed)")
-    except NotSupported:
+    s.config_path = cfg_path
+    text = read_text_nofollow(plat, cfg_path, 8 * 1024 * 1024, s.notes, "config.yaml")
+    if text is not None:
         try:
-            loaded = yaml.safe_load(cfg_path.read_text(errors="replace"))
+            loaded = yaml.safe_load(text)
             s.cfg = loaded if isinstance(loaded, dict) else {}
-        except (OSError, yaml.YAMLError) as e:
+        except yaml.YAMLError as e:
             s.notes.append(f"config.yaml unreadable: {e.__class__.__name__}")
-    except (OSError, yaml.YAMLError) as e:
-        s.notes.append(f"config.yaml unreadable: {e.__class__.__name__}")
-
-    env_path = target.home / ".env"
-    try:
-        s.dotenv = parse_dotenv(plat.read_nofollow(env_path, 4 * 1024 * 1024).decode("utf-8", "replace"))
-    except FileNotFoundError:
-        s.notes.append(".env not found")
-    except NotSupported:
-        try:
-            s.dotenv = parse_dotenv(env_path.read_text(errors="replace"))
-        except OSError as e:
-            s.notes.append(f".env unreadable: {e.__class__.__name__}")
-    except OSError as e:
-        s.notes.append(f".env unreadable: {e.__class__.__name__}")
-    target.meta["_settings"] = s
+    text = read_text_nofollow(plat, target.home / ".env", 4 * 1024 * 1024, s.notes, ".env")
+    if text is not None:
+        s.dotenv = parse_dotenv(text)
     return s

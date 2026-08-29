@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
-from daemonaudit.discover.hermes_config import load_settings
+from daemonaudit.discover.settings import load_settings
 from daemonaudit.model import CheckOutput, Finding, Position, Severity, Target
 from daemonaudit.platform import NotSupported, Platform
 from daemonaudit.registry import check

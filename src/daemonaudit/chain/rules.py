@@ -23,6 +23,8 @@ BLAST: dict[str, str] = {
     "anthropic-api-key": "spend on your Anthropic account and run models as you; reads nothing of yours",
     "openai-api-key": "spend on your OpenAI account; may reach fine-tunes, files and assistants you created",
     "openrouter-api-key": "spend your OpenRouter balance across every provider it fronts",
+    "xai-api-key": "spend on your xAI account and run Grok as you",
+    "groq-api-key": "spend on your Groq account",
     "azure-openai-api-key": "spend on your Azure OpenAI resource",
     "google-api-key": "billable calls on every Google API the key is enabled for",
     "google-oauth-client-secret": "impersonate your OAuth app to users who trust it",

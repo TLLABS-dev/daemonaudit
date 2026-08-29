@@ -26,7 +26,7 @@ def _scan(args: argparse.Namespace) -> int:
     plat = get_platform()
     targets = discover_all(plat, args.home)
     if not targets:
-        print("no supported agent daemon found (looked for Hermes at $HERMES_HOME / ~/.hermes; use --home)", file=sys.stderr)
+        print("no supported agent daemon found (looked for Hermes at $HERMES_HOME / ~/.hermes and OpenClaw at $OPENCLAW_STATE_DIR / ~/.openclaw; use --home)", file=sys.stderr)
         return EXIT_NO_TARGET
     report = ScanReport(tool_version=__version__, targets=targets, red_enabled=args.red)
     for t in targets:
@@ -62,7 +62,7 @@ def _checks(_: argparse.Namespace) -> int:
 
     load_builtin_checks()
     for c in CHECKS:
-        print(f"{c.id:10} {c.mode:5} {c.position.value:13} {c.title}")
+        print(f"{c.id:10} {c.mode:5} {c.position.value:13} {'/'.join(c.frameworks):16} {c.title}")
     return 0
 
 
@@ -75,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = p.add_subparsers(dest="cmd")
 
     s = sub.add_parser("scan", help="audit the daemons on this machine (default)", epilog=EXIT_CODE_HELP)
-    s.add_argument("--home", help="daemon home directory (default: $HERMES_HOME or ~/.hermes)")
+    s.add_argument("--home", help="daemon home directory; the framework is recognised from its contents (default: every supported daemon found at its usual home — $HERMES_HOME / ~/.hermes, $OPENCLAW_STATE_DIR / ~/.openclaw)")
     s.add_argument("--json", nargs="?", const="-", metavar="FILE", help="emit JSON to FILE, or to stdout with no FILE (diagnostics go to stderr)")
     s.add_argument("--html", metavar="FILE", help="write a self-contained HTML report to FILE (no scripts, no external assets)")
     s.add_argument("--terminal", action="store_true", help="also print the terminal report when --html is used")

@@ -13,8 +13,7 @@ import socket
 from collections import defaultdict
 
 from daemonaudit.chain.rules import BLAST
-from daemonaudit.discover.hermes import DEFAULT_PORTS
-from daemonaudit.discover.hermes_config import SECRET_NAME, load_settings
+from daemonaudit.discover.settings import SECRET_NAME, load_settings
 from daemonaudit.model import CheckOutput, Finding, Position, Severity, Target
 from daemonaudit.platform import NotSupported, Platform
 from daemonaudit.redact import find_hits, redact
@@ -82,33 +81,33 @@ def _http_get(ip: str, port: int, path: str) -> tuple[int | None, str]:
     return None, line[:80] or "no HTTP response"
 
 
-@check("RED-001", "Probe: daemon HTTP services answer without authentication", Position.REMOTE, mode="red")
+@check("RED-001", "Probe: daemon HTTP services answer without authentication", Position.REMOTE, mode="red", frameworks=("hermes", "openclaw"))
 def unauth_http(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     settings = load_settings(target, plat)
     pids = set(target.pids)
     for pid in list(pids):
         pids.update(c["pid"] for c in plat.children(pid))
-    known = set(DEFAULT_PORTS.values())
-    api_port, _ = settings.env("API_SERVER_PORT")
-    if api_port and api_port.isdigit():
-        known.add(int(api_port))
+    lay = target.layout
+    known = set(settings.service_ports().values())
     sockets = plat.listening_sockets()  # NotSupported → skip
     targets = {(s["ip"], s["port"]) for s in sockets if s["pid"] in pids or s["port"] in known}
     if not targets:
         out.note("no daemon TCP listeners to probe" + ("" if target.pids else " (daemon not running)"))
         return out
+    paths = tuple(dict.fromkeys(lay.http_probe_paths + lay.http_ui_paths))
     for ip, port in sorted(targets, key=lambda t: t[1]):
         try:
-            results = {path: _http_get(ip, port, path) for path in ("/", "/v1/models", "/health")}
+            results = {path: _http_get(ip, port, path) for path in paths}
         except NotLocal as e:
             out.note(str(e))
             continue
         statuses = {p: st for p, (st, _) in results.items() if st is not None}
         if not statuses:
-            out.note(f"{ip}:{port} did not speak HTTP ({results['/'][1]})")
+            out.note(f"{ip}:{port} did not speak HTTP ({results[paths[0]][1]})")
             continue
-        unauth_paths = [p for p, st in statuses.items() if 200 <= st < 300]
+        unauth_paths = [p for p, st in statuses.items() if 200 <= st < 300 and p not in lay.http_ui_paths]
+        ui_paths = [p for p, st in statuses.items() if 200 <= st < 300 and p in lay.http_ui_paths]
         auth_paths = [p for p, st in statuses.items() if st in (401, 403, 407)]
         ev = [f"GET {p} → {st}" for p, st in statuses.items()]
         if unauth_paths:
@@ -117,7 +116,7 @@ def unauth_http(target: Target, plat: Platform) -> CheckOutput:
                 Severity.HIGH, Position.REMOTE, f"{ip}:{port}",
                 "Verified by connecting from this host: the service served content to an anonymous client. "
                 "If NET-001 also shows this port bound beyond loopback, that is a remote, unauthenticated way in.",
-                "Put authentication in front of it (API_SERVER_KEY for the API server; OAuth/OIDC for the dashboard) or bind it to loopback and tunnel.",
+                settings.require_auth_fix(),
                 f"curl -s -o /dev/null -w '%{{http_code}}' http://127.0.0.1:{port}{unauth_paths[0]}  # expect 401/403",
                 ev, tags=["net:unauth:verified"],
             ))
@@ -128,12 +127,21 @@ def unauth_http(target: Target, plat: Platform) -> CheckOutput:
                 "The service rejected an anonymous request. Good — listed for the record.",
                 "Nothing to do.", None, ev, tags=["net:auth:verified"],
             ))
+        elif ui_paths:
+            out.findings.append(Finding(
+                "RED-001", f"Port {port} serves its web UI shell to anonymous clients; API paths did not answer 2xx",
+                Severity.INFO, Position.REMOTE, f"{ip}:{port}",
+                "The static UI is served to anyone (that is how single-page apps work); the API behind it did not serve content to an "
+                "anonymous GET. This probe cannot exercise the WebSocket/device-pairing handshake, so the policy checks (POL-005) are "
+                "the authority on whether that UI is actually gated.",
+                "Keep the listener on loopback and the gateway auth mode set; see POL-005.", None, ev, tags=["net:ui:anon"],
+            ))
         else:
             out.note(f"{ip}:{port} responded ({', '.join(ev)}) — neither 2xx nor 401/403; inspect manually")
     return out
 
 
-@check("RED-002", "Probe: credentials readable from the daemon's process environment", Position.LOCAL, mode="red")
+@check("RED-002", "Probe: credentials readable from the daemon's process environment", Position.LOCAL, mode="red", frameworks=("hermes", "openclaw"))
 def process_env_secrets(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     pids = list(target.pids)
@@ -169,28 +177,28 @@ def process_env_secrets(target: Target, plat: Platform) -> CheckOutput:
                 "RED-002", f"Exec-time environment of pid {pid} holds no credentials",
                 Severity.INFO, Position.LOCAL, f"pid {pid}",
                 "What this proves: the daemon was not *started* with keys in its environment. What it does not prove: "
-                "Hermes loads .env into its own memory after start, and /proc/<pid>/environ only shows the exec-time "
+                f"{target.layout.display_name} loads its vault into its own memory after start, and /proc/<pid>/environ only shows the exec-time "
                 "environment — the keys are still in the process, just not in this file. RED-003 measures that vault directly.",
                 "Nothing to do here. Keep secrets out of service units and shell profiles so this stays true.",
                 None, [f"{len(env)} variable(s) inspected"], tags=["procenv:clean"],
             ))
             continue
-        user = next((p["user"] for p in plat.find_processes("hermes_cli") if p["pid"] == pid), None) or "your user"
+        user = next((p["user"] for p in plat.find_processes(target.layout.process_needle or "") if p["pid"] == pid), None) or "your user"
         out.findings.append(Finding(
             "RED-002", f"{len(redacted)} credential(s) sit in the environment of pid {pid}, readable by any process running as {user}",
             Severity.MEDIUM, Position.LOCAL, f"pid {pid}",
             "Verified by reading the process environment as the same user. This is how .env works — but it means the "
             "blast radius of *any* code running as you (a browser exploit, a malicious npm postinstall, a bad skill) is every key listed. "
             "Nothing needs root.",
-            "Reduce what is loaded: keep only the keys this daemon actually uses in .env; use Hermes's secret-manager integration "
-            "(Bitwarden/1Password/op://) so keys are fetched at start and rotated centrally; run the gateway as a dedicated user.",
+            f"Reduce what is loaded: keep only the keys this daemon actually uses in {target.layout.preferred_vault}; use the framework's "
+            "secret-manager / secret-reference support so keys are fetched at start and rotated centrally; run the gateway as a dedicated user.",
             f"tr '\\0' '\\n' < /proc/{pid}/environ | grep -cE 'KEY|TOKEN|SECRET'  # Linux",
             names[:15], secrets=redacted, tags=["secret:procenv"],
         ))
     return out
 
 
-@check("RED-003", "Probe: the vault as any process running as you sees it", Position.LOCAL, mode="red")
+@check("RED-003", "Probe: the vault as any process running as you sees it", Position.LOCAL, mode="red", frameworks=("hermes", "openclaw"))
 def vault_blast_radius(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     home, lay = target.home, target.layout

@@ -4,13 +4,13 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daemonaudit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Red/blue security audit for self-hosted AI agent daemons. Finds the secrets, the open doors, and the blast radius."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [{ name = "TL" }]
-keywords = ["security", "audit", "ai-agent", "hermes", "openclaw", "mcp"]
+keywords = ["security", "audit", "ai-agent", "hermes", "openclaw", "mcp", "prompt-injection"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",

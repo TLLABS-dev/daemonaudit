@@ -25,6 +25,9 @@ jobs:
           python scripts/demo_home.py demo-hermes
           daemonaudit scan --red --home demo-hermes --json out.json --html out.html || test $? -eq 2
           python -c "import json; d=json.load(open('out.json')); assert d['summary']['attack_paths'] >= 1, d['summary']"
+          python scripts/demo_home.py demo-openclaw --openclaw
+          daemonaudit scan --red --home demo-openclaw --json oc.json --html oc.html || test $? -eq 2
+          python -c "import json; d=json.load(open('oc.json')); assert d['targets'][0]['framework'] == 'openclaw' and d['summary']['attack_paths'] >= 1, d['summary']"
   build:
     needs: test
     runs-on: ubuntu-latest

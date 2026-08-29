@@ -33,7 +33,7 @@ def _mode(plat: Platform, p: Path, out: CheckOutput):
         return None
 
 
-@check("PERM-001", "Vault and private files readable by others", Position.LOCAL)
+@check("PERM-001", "Vault and private files readable by others", Position.LOCAL, frameworks=("hermes", "openclaw"))
 def vault_permissions(target: Target, plat: Platform) -> CheckOutput:
     _need_posix(plat)
     home, lay = target.home, target.layout
@@ -123,7 +123,7 @@ def _original_for(path: Path, lay) -> Path | None:
     return None
 
 
-@check("PERM-002", "Backup file more permissive than its original", Position.LOCAL)
+@check("PERM-002", "Backup file more permissive than its original", Position.LOCAL, frameworks=("hermes", "openclaw"))
 def backup_weaker_than_original(target: Target, plat: Platform) -> CheckOutput:
     _need_posix(plat)
     home, lay = target.home, target.layout
@@ -175,7 +175,7 @@ def backup_weaker_than_original(target: Target, plat: Platform) -> CheckOutput:
     return out
 
 
-@check("PERM-003", "State files writable by others or executable", Position.LOCAL)
+@check("PERM-003", "State files writable by others or executable", Position.LOCAL, frameworks=("hermes", "openclaw"))
 def writable_or_executable_state(target: Target, plat: Platform) -> CheckOutput:
     _need_posix(plat)
     home, lay = target.home, target.layout

@@ -27,7 +27,7 @@ from pathlib import Path
 import yaml
 
 from daemonaudit.checks._walk import rel, walk_files
-from daemonaudit.discover.hermes_config import SECRET_NAME
+from daemonaudit.discover.settings import SECRET_NAME
 from daemonaudit.model import CheckOutput, Finding, Position, Severity, Target
 from daemonaudit.platform import NotSupported, Platform, q
 from daemonaudit.registry import check
@@ -35,13 +35,16 @@ from daemonaudit.registry import check
 SCRIPT_EXT = {".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".ts", ".rb", ".pl", ".ps1"}
 BINARY_EXT = {".pdf", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".svg", ".zip", ".gz", ".tar", ".whl", ".pyc",
               ".woff", ".woff2", ".ttf", ".mp3", ".mp4", ".wav", ".bin", ".so", ".dylib", ".dll", ".exe", ".db", ".sqlite"}
-DOC_NAMES = {"SKILL.md", "SOUL.md", "AGENTS.md", "CLAUDE.md", ".cursorrules", "README.md"}
+DOC_NAMES = {"SKILL.md", "SOUL.md", "AGENTS.md", "CLAUDE.md", ".cursorrules", "README.md", "TOOLS.md", "IDENTITY.md", "USER.md",
+             "HEARTBEAT.md", "BOOTSTRAP.md", "MEMORY.md"}
+# Layout.context_files / Layout.vault_basenames are the per-framework versions of these two.
 CONTEXT_FILES = ["SOUL.md", "AGENTS.md", ".cursorrules"]
-VAULT_BASENAMES = {".env", "auth.json", ".anthropic_oauth.json", "mcp-tokens", "pairing"}
+VAULT_BASENAMES = {".env", "auth.json", ".anthropic_oauth.json", "mcp-tokens", "pairing", "openclaw.json", "auth-profiles.json", "credentials"}
 
-# Credentials Hermes itself holds: provider + platform + its own. Everything else is "scoped".
+# Credentials the daemon itself holds: provider + platform + its own. Everything else is "scoped".
 MASTER_ENV = re.compile(
-    r"^(ANTHROPIC|OPENAI|OPENROUTER|GITHUB|GH|COPILOT|AWS|AZURE|GOOGLE|GCP|GEMINI|SLACK|TELEGRAM|DISCORD|WHATSAPP|TEAMS|HERMES|API_SERVER|GATEWAY|NOUS)_[A-Z0-9_]*$"
+    r"^(ANTHROPIC|OPENAI|OPENROUTER|GITHUB|GH|COPILOT|AWS|AZURE|GOOGLE|GCP|GEMINI|SLACK|TELEGRAM|DISCORD|WHATSAPP|TEAMS|SIGNAL|MATRIX"
+    r"|HERMES|API_SERVER|GATEWAY|NOUS|OPENCLAW|XAI|GROQ|MISTRAL|DEEPSEEK|MINIMAX|MOONSHOT|CEREBRAS|VENICE|ZAI|BRAVE|PERPLEXITY|ELEVENLABS)_[A-Z0-9_]*$"
 )
 
 # --- shell / script vocab -------------------------------------------------------------
@@ -137,7 +140,7 @@ def _is_bundled(home: Path, lay, skills_root: Path, p: Path) -> bool:
     if not lay.bundled_skills_dir:
         return False
     try:
-        vendor = home / lay.bundled_skills_dir / p.relative_to(skills_root)
+        vendor = home / lay.bundled_skills_dir / p.relative_to(skills_root)  # an absolute bundled dir wins over home
     except ValueError:
         return False
     try:
@@ -323,39 +326,70 @@ def _cred_files(value) -> list[str]:
     return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
 
-def _is_vault_path(path: str) -> bool:
+def _is_vault_path(path: str, basenames: set[str] = VAULT_BASENAMES) -> bool:
     norm = posixpath.normpath(path.replace("\\", "/"))
     if norm.startswith("/") or norm.startswith("..") or path.startswith("~"):
         return True  # absolute / traversal / home-relative: never a scoped token file
-    return posixpath.basename(norm) in VAULT_BASENAMES or any(part in VAULT_BASENAMES for part in norm.split("/"))
+    return posixpath.basename(norm) in basenames or any(part in basenames for part in norm.split("/"))
 
 
-def _declarations(fm: dict) -> list[tuple[str, list[str], list[str]]]:
-    """[(location, env_names, cred_files)] for top level and metadata subtrees."""
+def _declarations(fm: dict, framework: str = "hermes") -> list[tuple[str, list[str], list[str]]]:
+    """[(location, env_names, cred_files)] — the places a skill can ask for credentials.
+
+    Hermes reads `required_environment_variables` / `required_credential_files` at the top
+    level only; the same keys under `metadata:` are inert (and graded down by the caller).
+    OpenClaw reads `metadata.openclaw.requires.env` (+ `primaryEnv`, and `skills.entries.<name>.env`
+    in config) — those are runtime for OpenClaw, and the top-level Hermes keys are inert there.
+    """
+    meta = fm.get("metadata") if isinstance(fm.get("metadata"), dict) else {}
+    if framework == "openclaw":
+        oc = meta.get("openclaw") if isinstance(meta.get("openclaw"), dict) else {}
+        req = oc.get("requires") if isinstance(oc.get("requires"), dict) else {}
+        envs = _env_names(req.get("env")) + _env_names(oc.get("primaryEnv"))
+        creds = _cred_files(req.get("files")) + _cred_files(oc.get("credentialFiles"))
+        out = [("frontmatter", envs, creds)]
+        inert = _env_names(fm.get("required_environment_variables")) + _env_names(meta.get("required_environment_variables"))
+        if inert:
+            out.append(("hermes-style keys", inert, _cred_files(fm.get("required_credential_files"))))
+        return out
     out = [("frontmatter", _env_names(fm.get("required_environment_variables")), _cred_files(fm.get("required_credential_files")))]
-    meta = fm.get("metadata")
-    if isinstance(meta, dict):
+    if meta:
         for loc, sub in (("metadata", meta), ("metadata.hermes", meta.get("hermes") if isinstance(meta.get("hermes"), dict) else {})):
             if sub:
                 out.append((loc, _env_names(sub.get("required_environment_variables")), _cred_files(sub.get("required_credential_files"))))
     return out
 
 
-@check("SKILL-001", "Risky patterns in installed skills and context files", Position.SUPPLY_CHAIN)
+@check("SKILL-001", "Risky patterns in installed skills and context files", Position.SUPPLY_CHAIN, frameworks=("hermes", "openclaw"))
 def skills(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     home, lay = target.home, target.layout
-    skills_root = home / "skills"
+    fw = lay.display_name
+    roots = [home / d for d in lay.skills_dirs]  # absolute entries win over home, by pathlib's rules
+    skills_root = roots[0]
     cats: dict[str, list[str]] = defaultdict(list)
     n_skills = n_scripts = 0
     net_skills: set[str] = set()
     scoped: list[str] = []
 
-    files: list[Path] = list(walk_files(skills_root, lay.exclude_dirs, max_depth=6))
-    files += [home / c for c in CONTEXT_FILES if (home / c).is_file() and not (home / c).is_symlink()]
+    files: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        for p in walk_files(root, lay.exclude_dirs, max_depth=6):
+            if p not in seen:
+                seen.add(p)
+                files.append(p)
+    for c in lay.context_files:
+        cp = home / c
+        if cp.is_file() and not cp.is_symlink() and cp not in seen:
+            seen.add(cp)
+            files.append(cp)
     if not files:
         out.note("no skills directory or context files found")
         return out
+
+    def root_of(p: Path) -> Path | None:
+        return next((r for r in roots if p.is_relative_to(r)), None)
 
     for p in files:
         raw = _read(plat, p)
@@ -363,9 +397,10 @@ def skills(target: Target, plat: Platform) -> CheckOutput:
             if p.suffix.lower() not in BINARY_EXT and not p.is_file():
                 out.note(f"unreadable: {rel(home, p)}")
             continue
-        in_skills = p.is_relative_to(skills_root)
-        skill = _skill_of(skills_root, p) if in_skills else rel(home, p)
-        r = rel(home, p) + (" (bundled)" if in_skills and _is_bundled(home, lay, skills_root, p) else "")
+        root = root_of(p)
+        in_skills = root is not None
+        skill = _skill_of(root, p) if in_skills else rel(home, p)
+        r = rel(home, p) + (" (bundled)" if in_skills and _is_bundled(home, lay, root, p) else "")
         is_doc = p.name in DOC_NAMES or p.suffix.lower() in (".md", ".txt")
         is_script = p.suffix.lower() in SCRIPT_EXT
         n_skills += p.name == "SKILL.md"
@@ -385,15 +420,15 @@ def skills(target: Target, plat: Platform) -> CheckOutput:
                     cats["hidden_comment"].append(f"{skill}: {r}:{doc.count(chr(10), 0, m.start()) + 1}")
 
         if p.name == "SKILL.md":
-            for loc, envs, creds in _declarations(_frontmatter(raw)):
-                tag = "" if loc == "frontmatter" else f" [{loc}: not read by Hermes at runtime]"
+            for loc, envs, creds in _declarations(_frontmatter(raw), target.framework):
+                tag = "" if loc == "frontmatter" else f" [{loc}: not read by {fw} at runtime]"
                 for n in envs:
                     if MASTER_ENV.match(n) and SECRET_NAME.search(n):
                         cats["wants_keys"].append(f"{skill}: {n}{tag}")
                     elif SECRET_NAME.search(n):
                         scoped.append(f"{skill}: {n}")
                 for c in creds:
-                    if _is_vault_path(c):
+                    if _is_vault_path(c, lay.vault_basenames | VAULT_BASENAMES):
                         cats["wants_vault"].append(f"{skill}: {c}{tag}")
 
         if is_script:
@@ -428,11 +463,11 @@ def skills(target: Target, plat: Platform) -> CheckOutput:
                            "Markdown renderers hide `<!-- … -->`; the model does not.",
                            "Inspect the comment bodies; remove anything that reads as an instruction to the agent."),
         "wants_keys": ("Skill frontmatter requests provider credentials as environment variables", Severity.MEDIUM,
-                       "Hermes auto-passes `required_environment_variables` into the skill's shell. A skill asking for ANTHROPIC_API_KEY or GITHUB_TOKEN gets your master key, not a scoped one. Scoped keys (a weather API key) are listed under Inventory instead.",
+                       f"{fw} passes a skill's declared environment variables into the skill's shell. A skill asking for ANTHROPIC_API_KEY or GITHUB_TOKEN gets your master key, not a scoped one. Scoped keys (a weather API key) are listed under Inventory instead.",
                        "Decide per skill whether it truly needs that key; use a scoped/secondary token where the provider supports it."),
         "wants_vault": ("Skill requests the vault itself as a credential file", Severity.HIGH,
-                        "`required_credential_files` mounts files into the tool environment. Asking for .env / auth.json, an absolute path, or `../` traversal is asking for everything. Current Hermes refuses these at mount time — the request is still the signature of a hostile skill.",
-                        "Remove the skill. A legitimate skill names one specific token file relative to the Hermes home."),
+                        f"Declared credential files are mounted into the tool environment. Asking for {lay.preferred_vault} / the auth store, an absolute path, or `../` traversal is asking for everything. {fw} may refuse these at mount time — the request is still the signature of a hostile skill.",
+                        f"Remove the skill. A legitimate skill names one specific token file relative to the {fw} home."),
         "net_and_secrets": ("Skill script both reads credentials and talks to the network", Severity.LOW,
                             "Reading the vault, ~/.ssh, ~/.aws, dumping the environment, or a provider key by name in the same script that makes network calls (curl, nc, openssl, DNS, python http…) is the exfiltration shape. Sometimes legitimate — which is why it needs a human look. Scripts that only read their own scoped key are not listed.",
                             "Read the script. Confirm every network destination is the service the skill claims to use."),
@@ -445,10 +480,10 @@ def skills(target: Target, plat: Platform) -> CheckOutput:
         n = len({i.split(":")[0] for i in items})
         if all("(bundled)" in i for i in items) and key not in NO_DOWNGRADE:
             sev = DOWNGRADE[sev]
-            why += " All flagged files are byte-identical to the copies Hermes ships, so this is the vendor's content, not something planted on your machine."
-        elif key in ("wants_keys", "wants_vault") and all("not read by Hermes" in i for i in items):
+            why += f" All flagged files are byte-identical to the copies {fw} ships, so this is the vendor's content, not something planted on your machine."
+        elif key in ("wants_keys", "wants_vault") and all(f"not read by {fw}" in i for i in items):
             sev = DOWNGRADE[sev]
-            why += " These declarations sit under `metadata:`, which Hermes does not read for credentials — inert today, but not what an honest skill writes."
+            why += f" These declarations sit where {fw} does not read them for credentials — inert today, but not what an honest skill writes."
         out.findings.append(Finding("SKILL-001", f"{title} — {n} skill(s)", sev, Position.SUPPLY_CHAIN, str(skills_root), why, fix,
                                     f"daemonaudit scan --home {q(home)}  # SKILL-001 category: {key}", sorted(items)[:15],
                                     tags=SKILL_TAGS.get(key, [])))
@@ -458,7 +493,7 @@ def skills(target: Target, plat: Platform) -> CheckOutput:
         Severity.INFO, Position.SUPPLY_CHAIN, str(skills_root),
         "Every skill is code and instructions you did not write, running with your agent's privileges. This is the size of that surface. Scoped credential declarations are normal and listed for awareness.",
         "Remove skills you do not use: fewer skills, smaller blast radius.",
-        f"ls {q(skills_root)}",
+        " ; ".join(f"ls {q(r)}" for r in roots if r.exists()) or f"ls {q(skills_root)}",
         sorted(net_skills)[:10] + [f"declares scoped credential: {s}" for s in sorted(scoped)[:5]],
     ))
     return out

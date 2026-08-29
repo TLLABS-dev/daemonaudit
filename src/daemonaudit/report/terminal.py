@@ -103,12 +103,14 @@ def render(report: ScanReport, console: Console | None = None, show_banner: bool
             )
             con.print(Panel(body, title=title, title_align="left", border_style=BORDER[f.severity]))
 
+    multi = len(report.targets) > 1
     s = Table(title="Checks", expand=False)
-    for col in ("id", "status", "check", "note"):
+    for col in (("id", "target", "status", "check", "note") if multi else ("id", "status", "check", "note")):
         s.add_column(col)
     for r in report.results:
         note = (r.note or "").strip().splitlines()
-        s.add_row(T(r.check_id), T(r.status, STATUS_STYLE.get(r.status, "")), T(r.title), T(note[-1] if note else ""))
+        cells = [T(r.check_id)] + ([T(r.framework or "?")] if multi else []) + [T(r.status, STATUS_STYLE.get(r.status, "")), T(r.title), T(note[-1] if note else "")]
+        s.add_row(*cells)
     con.print(s)
 
     c = report.counts()

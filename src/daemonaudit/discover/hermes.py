@@ -32,9 +32,17 @@ HERMES_LAYOUT = Layout(
     transcript_hints=("sessions", "logs", "state.db", ".hermes_history", "memories"),
     preferred_vault=".env",
     bundled_skills_dir="hermes-agent/skills",
+    skills_dirs=["skills"],
+    context_files=["SOUL.md", "AGENTS.md", ".cursorrules"],
+    vault_basenames={".env", "auth.json", ".anthropic_oauth.json", "mcp-tokens", "pairing"},
+    default_ports={"api_server": 8642, "bluebubbles_webhook": 8645, "desktop_cdp": 9222},
+    http_probe_paths=("/", "/v1/models", "/health"),
+    http_ui_paths=(),
+    process_needle="hermes_cli",
+    display_name="Hermes",
 )
 
-DEFAULT_PORTS = {"api_server": 8642, "bluebubbles_webhook": 8645, "desktop_cdp": 9222}
+DEFAULT_PORTS = HERMES_LAYOUT.default_ports
 
 
 def hermes_home(override: str | os.PathLike | None = None) -> Path:

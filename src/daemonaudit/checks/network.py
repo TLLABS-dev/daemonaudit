@@ -5,8 +5,7 @@ from __future__ import annotations
 import ipaddress
 
 from daemonaudit.checks._walk import rel, walk_entries
-from daemonaudit.discover.hermes import DEFAULT_PORTS
-from daemonaudit.discover.hermes_config import load_settings
+from daemonaudit.discover.settings import load_settings
 from daemonaudit.model import CheckOutput, Finding, Position, Severity, Target
 from daemonaudit.platform import Platform
 from daemonaudit.registry import check
@@ -23,7 +22,7 @@ def _is_wildcard(ip: str) -> bool:
     return ip in ("0.0.0.0", "::", "*", "")
 
 
-@check("NET-001", "Daemon listeners reachable from the network", Position.REMOTE)
+@check("NET-001", "Daemon listeners reachable from the network", Position.REMOTE, frameworks=("hermes", "openclaw"))
 def listeners(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     settings = load_settings(target, plat)
@@ -33,11 +32,10 @@ def listeners(target: Target, plat: Platform) -> CheckOutput:
         for c in plat.children(pid):
             pids.add(c["pid"])
             names[c["pid"]] = c["name"]
-    known_ports = dict(DEFAULT_PORTS)
-    api_port, _ = settings.env("API_SERVER_PORT")
-    if api_port and api_port.isdigit():
-        known_ports["api_server"] = int(api_port)
+    known_ports = settings.service_ports()
+    unauth_ports = settings.unauthenticated_ports()
     port_names = {v: k for k, v in known_ports.items()}
+    fw = target.layout.display_name
 
     sockets = plat.listening_sockets()  # NotSupported → registry marks skip
     ours = [s for s in sockets if (s["pid"] in pids) or (s["port"] in port_names)]
@@ -64,7 +62,7 @@ def listeners(target: Target, plat: Platform) -> CheckOutput:
             loop.append(label)
             continue
         exposure = "every interface" if _is_wildcard(s["ip"]) else f"the {s['ip']} interface"
-        api_unauth = s["port"] == known_ports["api_server"] and not settings.env_set("API_SERVER_KEY")
+        api_unauth = s["port"] in unauth_ports
         out.findings.append(
             Finding(
                 check_id="NET-001",
@@ -74,14 +72,11 @@ def listeners(target: Target, plat: Platform) -> CheckOutput:
                 asset=f"{s['ip']}:{s['port']}",
                 why=(
                     f"Anything that can reach this host on port {s['port']} can talk to the daemon directly. "
-                    + ("The API server has no API_SERVER_KEY, so that access is unauthenticated: remote prompt → tool use. "
+                    + (f"{fw} is configured to answer on this port without credentials, so that access is unauthenticated: remote prompt → tool use. "
                        if api_unauth else "Whether that is safe depends entirely on the auth in front of it. ")
                     + "On a laptop this includes every network you join."
                 ),
-                fix=(
-                    "Bind to 127.0.0.1 (e.g. API_SERVER_HOST=127.0.0.1) and reach it over SSH/Tailscale, "
-                    "or put it behind an authenticating reverse proxy. Set API_SERVER_KEY if the API server is enabled."
-                ),
+                fix=settings.bind_loopback_fix(),
                 verify_cmd=f"ss -tlnp 2>/dev/null | grep ':{s['port']} ' || lsof -nP -iTCP:{s['port']} -sTCP:LISTEN",
                 evidence=[label],
                 tags=["net:public"] + (["net:unauth"] if api_unauth else []),
@@ -104,7 +99,7 @@ def listeners(target: Target, plat: Platform) -> CheckOutput:
     return out
 
 
-@check("NET-002", "Unix sockets accessible to other users", Position.LOCAL)
+@check("NET-002", "Unix sockets accessible to other users", Position.LOCAL, frameworks=("hermes", "openclaw"))
 def unix_sockets(target: Target, plat: Platform) -> CheckOutput:
     if not plat.posix_modes:
         from daemonaudit.registry import Skipped

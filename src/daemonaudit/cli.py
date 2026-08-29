@@ -48,7 +48,7 @@ def _scan(args: argparse.Namespace) -> int:
         if args.json == "-":
             sys.stdout.write(text + "\n")
         else:
-            Path(args.json).write_text(text)
+            Path(args.json).write_text(text, encoding="utf-8")  # Windows defaults to cp1252
             print(f"wrote {args.json}", file=sys.stderr)
     elif not args.html or args.terminal:
         from daemonaudit.report.terminal import render

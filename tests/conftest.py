@@ -41,5 +41,8 @@ def hermes_home(tmp_path: Path) -> Path:
     outside = tmp_path / "outside.txt"
     _w(outside, f"TOKEN={FAKE_GITHUB}\n", 0o644)
     (h / "sessions").mkdir()
-    os.symlink(outside, h / "sessions" / "evil-link")
+    try:
+        os.symlink(outside, h / "sessions" / "evil-link")
+    except (OSError, NotImplementedError):
+        pass  # Windows without developer mode cannot create symlinks; POSIX-only tests still exercise the trap
     return h

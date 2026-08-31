@@ -53,7 +53,7 @@ not evaluate, and the OpenClaw adapter now matches OpenClaw's own config-loading
 - Install instructions point at PyPI (`uvx daemonaudit`, `pipx install daemonaudit`).
 - `Repository`, `Issues`, `Changelog` project URLs; Python 3.10–3.13 classifiers.
 - README: OpenClaw screenshot next to the Hermes one; the per-check matrix is collapsible.
-- Tests: 121 (was 92) — parse-error skip on both frameworks, JSON5 edge cases, include
+- Tests: 126 (was 97; `pytest -q` shows 120–121 passed depending on what the box lets a non-root user skip) — parse-error skip on both frameworks, JSON5 edge cases, include
   confinement/cycles/depth/size, `OPENCLAW_CONFIG_PATH` boundary, per-agent POL-003, a process
   attribution matrix (node/bun/`--dev`/profiles/state dir/wrapper/unreadable env), an
   `openclaw onboard`-shaped default home (only the graded-MEDIUM defaults appear, no attack path),

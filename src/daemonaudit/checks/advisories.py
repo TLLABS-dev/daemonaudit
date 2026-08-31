@@ -57,6 +57,8 @@ def advisories(target: Target, plat: Platform) -> CheckOutput:
     else:
         out.note(".update_check absent — Hermes has not run its update check")
 
+    if settings.parse_error:
+        out.note(settings.parse_error)
     acked = settings.get("security.acked_advisories") or []
     if acked:
         out.findings.append(

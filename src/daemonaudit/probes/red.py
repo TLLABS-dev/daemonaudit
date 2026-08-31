@@ -26,6 +26,14 @@ class NotLocal(RuntimeError):
     pass
 
 
+def _not_running(target: Target) -> str:
+    if target.pids:
+        return ""
+    if target.unattributed_pids:
+        return f" (pid {', '.join(map(str, target.unattributed_pids))} is running but could not be attributed to this home — see NET-001)"
+    return " (daemon not running)"
+
+
 def _host_addresses() -> set[str]:
     addrs = {"127.0.0.1", "::1"}
     try:
@@ -98,7 +106,7 @@ def unauth_http(target: Target, plat: Platform) -> CheckOutput:
     sockets = plat.listening_sockets()  # NotSupported → skip
     targets = {(s["ip"], s["port"]) for s in sockets if s["pid"] in pids or s["port"] in known}
     if not targets:
-        out.note("no daemon TCP listeners to probe" + ("" if target.pids else " (daemon not running)"))
+        out.note("no daemon TCP listeners to probe" + _not_running(target))
         return out
     paths = tuple(dict.fromkeys(lay.http_probe_paths + lay.http_ui_paths))
     # One probe per port: a service bound to both 127.0.0.1 and ::1 is one service.
@@ -158,7 +166,7 @@ def process_env_secrets(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     pids = list(target.pids)
     if not pids:
-        out.note("daemon not running; process environment cannot be read")
+        out.note("process environment cannot be read" + _not_running(target))
         return out
     for pid in pids:
         try:

@@ -98,6 +98,7 @@ def approval_bypass(target: Target, plat: Platform) -> CheckOutput:
 def approvals_config(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     s = load_settings(target, plat)
+    s.require_config()  # config.yaml unparsable → skip, never a pass on defaults (AGENTS.md §4)
     cfg = str(target.home / CFG)
     mode = s.get("approvals.mode", "smart")
     if mode == "off":
@@ -136,6 +137,7 @@ def approvals_config(target: Target, plat: Platform) -> CheckOutput:
 def unsandboxed(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     s = load_settings(target, plat)
+    s.require_config()  # config.yaml unparsable → skip, never a pass on defaults (AGENTS.md §4)
     backend = s.get("terminal.backend") or s.env("TERMINAL_ENV")[0] or "local"
     safe_root = s.env_set("HERMES_WRITE_SAFE_ROOT")
     cwd = s.get("terminal.cwd")
@@ -168,7 +170,9 @@ def allow_all_users(target: Target, plat: Platform) -> CheckOutput:
             "and with tools enabled that is remote command execution gated only by the approval prompt.",
             f"Remove the allow-all flag(s) from {vault}; use GATEWAY_ALLOWED_USERS / <PLATFORM>_ALLOWED_USERS or DM pairing (hermes pairing).",
             f"grep -nE 'ALLOW_ALL_USERS' {q(vault)}  # expect nothing", [_env_where(s, n) for n in on], ["content:allow-all"]))
-    if s.get("unauthorized_dm_behavior") not in (None, "pair", "ignore"):
+    if s.parse_error:
+        out.note(s.parse_error)
+    elif s.get("unauthorized_dm_behavior") not in (None, "pair", "ignore"):
         out.findings.append(_f("POL-004", f"unauthorized_dm_behavior: {s.get('unauthorized_dm_behavior')}",
             Severity.MEDIUM, Position.CONTENT, str(target.home / CFG),
             "Unknown value; Hermes expects pair or ignore.", "Set unauthorized_dm_behavior: pair.", None))
@@ -284,6 +288,7 @@ def debug_leaks(target: Target, plat: Platform) -> CheckOutput:
 def content_guards(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     s = load_settings(target, plat)
+    s.require_config()  # config.yaml unparsable → skip, never a pass on defaults (AGENTS.md §4)
     cfg = str(target.home / CFG)
     vault = str(target.vault_path)
     if s.get("security.allow_private_urls") is True or s.env_truthy("HERMES_ALLOW_PRIVATE_URLS"):
@@ -314,6 +319,7 @@ def content_guards(target: Target, plat: Platform) -> CheckOutput:
 def env_passthrough(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     s = load_settings(target, plat)
+    s.require_config()  # config.yaml unparsable → skip, never a pass on defaults (AGENTS.md §4)
     cfg = str(target.home / CFG)
     leaked: list[str] = []
     for key in ("terminal.env_passthrough", "terminal.docker_forward_env"):
@@ -347,6 +353,7 @@ def env_passthrough(target: Target, plat: Platform) -> CheckOutput:
 def mcp_env_secrets(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
     s = load_settings(target, plat)
+    s.require_config()  # config.yaml unparsable → skip, never a pass on defaults (AGENTS.md §4)
     cfg = str(target.home / CFG)
     servers = s.get("mcp_servers") or {}
     ev: list[str] = []

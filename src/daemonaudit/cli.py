@@ -26,7 +26,10 @@ def _scan(args: argparse.Namespace) -> int:
     plat = get_platform()
     targets = discover_all(plat, args.home)
     if not targets:
-        print("no supported agent daemon found (looked for Hermes at $HERMES_HOME / ~/.hermes and OpenClaw at $OPENCLAW_STATE_DIR / ~/.openclaw; use --home)", file=sys.stderr)
+        if args.home:
+            print(f"{args.home}: not a Hermes or OpenClaw home (expected openclaw.json or agents/+credentials/, or config.yaml / .env / hermes-agent/)", file=sys.stderr)
+        else:
+            print("no supported agent daemon found (looked for Hermes at $HERMES_HOME / ~/.hermes and OpenClaw at $OPENCLAW_STATE_DIR / ~/.openclaw; use --home)", file=sys.stderr)
         return EXIT_NO_TARGET
     report = ScanReport(tool_version=__version__, targets=targets, red_enabled=args.red)
     for t in targets:

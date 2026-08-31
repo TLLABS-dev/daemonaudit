@@ -76,9 +76,12 @@ def render_html(report: ScanReport) -> str:
     w(f'<span class="chip">{"red probes on" if report.red_enabled else "passive only — run with --red for attack paths and blast radius"}</span>')
     w("</div>")
 
-    w('<div class="wrap"><table><tr><th>framework</th><th>home</th><th>version</th><th>running pids</th></tr>')
+    notes_any = any(t.meta.get("notes") for t in report.targets)
+    w('<div class="wrap"><table><tr><th>framework</th><th>home</th><th>version</th><th>running pids</th>' + ("<th>notes</th>" if notes_any else "") + "</tr>")
     for t in report.targets:
-        w(f"<tr><td>{e(t.framework)}</td><td><code>{e(t.home)}</code></td><td>{e(t.version or '?')}</td><td>{e(', '.join(map(str, t.pids)) or 'not running')}</td></tr>")
+        notes = "<br>".join(e(n) for n in (t.meta.get("notes") or []))
+        w(f"<tr><td>{e(t.framework)}</td><td><code>{e(t.home)}</code></td><td>{e(t.version or '?')}</td><td>{e(t.running_label())}</td>"
+          + (f'<td class="st skip">{notes}</td>' if notes_any else "") + "</tr>")
     w("</table></div>")
 
     if report.attack_paths:

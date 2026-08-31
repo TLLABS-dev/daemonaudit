@@ -12,7 +12,8 @@ platform adapter. Both read `AGENTS.md` first. Humans read this file to see wher
 | 2 | NET-001/002 listeners + unix sockets; POL-001..010 (yolo/exec-ask, approvals, sandbox, allow-all users, API server, webhooks/dashboard, debug leaks, SSRF/tirith/project plugins, env passthrough, MCP literal secrets); SKILL-001 (8 categories, bundled-skill detection); ADV-001 (local update cache + acked advisories) | **done 2026-08-27** (pending Codex C3) |
 | 3 | RED-001 unauth HTTP probe (localhost gate, hard-fail otherwise), RED-002 exec-time process env, RED-003 vault blast radius; `chain/rules.py` (9 rules, tag-based, foothold floor) → attack paths with kill-hop + per-kind blast radius table; `info` status; exit codes ignore INFO | **done 2026-08-27** (pending Codex C4) |
 | 4 | `--html` self-contained report; mascot SVG + `assets/demo-report.svg` screenshot from `scripts/demo_home.py`; LICENSE (MIT); GitHub Actions CI on Linux/macOS/Windows × py3.10/3.12 with a demo smoke-scan + build; README; version 0.1.0 + tag | **done 2026-08-27** |
-| 5 | **OpenClaw adapter** (v0.2.0): `discover/openclaw.py` + `openclaw_config.py` (JSON5 + `$include` + `.env`), shared `discover/settings.py` with per-framework dispatch, `Layout` grown to carry skill roots / context files / ports / probe paths, generic checks opened to both frameworks, `checks/policy_openclaw.py` (POL-001..010 + ADV-001 with the same ids and tags), SKILL-001 multi-root + `metadata.openclaw.requires.env`, xAI/Groq key kinds, `--home` framework recognition, both daemons in one report (`CheckResult.framework`, target column), OpenClaw demo home in CI, `tests/test_openclaw.py` (11 tests) | **done 2026-08-29** (pending Codex C5) |
+| 5 | **OpenClaw adapter** (v0.2.0): `discover/openclaw.py` + `openclaw_config.py` (JSON5 + `$include` + `.env`), shared `discover/settings.py` with per-framework dispatch, `Layout` grown to carry skill roots / context files / ports / probe paths, generic checks opened to both frameworks, `checks/policy_openclaw.py` (POL-001..010 + ADV-001 with the same ids and tags), SKILL-001 multi-root + `metadata.openclaw.requires.env`, xAI/Groq key kinds, `--home` framework recognition, both daemons in one report (`CheckResult.framework`, target column), OpenClaw demo home in CI, `tests/test_openclaw.py` (11 tests) | **done 2026-08-29** (C5 answered 2026-08-30) |
+| 5.1 | **v0.2.1 — no false pass on a broken config** (both frameworks: `Settings.parse_error` + `require_config()` → `Skipped`, error in the Targets table + JSON `meta.config_error`), JSON5 loader completeness and no silent repair, C5 blockers (`$include` boundary/depth/size/cycles, `OPENCLAW_CONFIG_PATH` boundary, per-agent POL-003), attribution-failure reporting, workspace-scoping guard, `--home` recognition, PyPI-first README + CHANGELOG, `tests/test_no_false_pass.py` + 29 new OpenClaw tests | **done 2026-08-30** |
 | next | generic MCP adapter, traversal-aware exposure (#1 below), exec-tree check (#2), canary-injection probe, local-Ollama semantic skill review, guided remediation with rollback, `dir_fd`-relative walking for hostile trees, scrub-only pattern set broader than finding patterns | |
 
 ## Threat model (what every check maps to)
@@ -143,6 +144,10 @@ To publish v0.1.0 after that: re-push the tag so CI re-runs with the publish job
 `git push origin :refs/tags/v0.1.0 && git push origin v0.1.0` (delete + repush). Future releases:
 bump `version` in pyproject.toml + `__init__.py`, tag `vX.Y.Z`, push the tag.
 
+Release checklist: bump `pyproject.toml` + `__init__.py`, add the `CHANGELOG.md` entry, regenerate the two README
+screenshots (fake demo homes under `$HOME`, deleted afterwards; grep the SVGs for `home/`, `FAKE`, `/tmp/`), run
+`pytest` and a `--red` scan of the real homes, commit, tag `vX.Y.Z`, push master and the tag.
+
 Token fallback (if Trusted Publishing is ever a problem): add a `PYPI_API_TOKEN` repo secret and
 give the publish step `with: { password: ${{ secrets.PYPI_API_TOKEN }} }`. Trusted Publishing is preferred.
 
@@ -190,7 +195,7 @@ inventory was accurate. Don't "fix" detection toward matching that grep.
 - HTML report is one file: inlined CSS, no `<script>`, no external asset, light/dark via prefers-color-scheme,
   everything scrubbed + HTML-escaped. Test asserts no raw secret and no `http(s)://` in the output.
 - PyPI publish is wired but commented in CI — needs the project created + Trusted Publisher. `uvx --from git+…`
-  works today.
+  works today. *(Superseded: Trusted Publishing has been live since v0.1.0; `uvx daemonaudit` is the install path.)*
 
 ## Lessons from C4 native verification (2026-08-27)
 - **There is no Hermes on the Windows side of TLlabs.** No `%USERPROFILE%\.hermes`, no `HERMES_HOME`, no process.
@@ -230,6 +235,26 @@ inventory was accurate. Don't "fix" detection toward matching that grep.
 - **The gateway log is outside the home** (`/tmp/openclaw/openclaw-*.log` by default). Discovery lists the last seven as `private_files`
   so PERM-001 grades them; nothing else in the tool looks outside the home.
 
+## Lessons from v0.2.1 (2026-08-30)
+- **"Loader falls back to `{}`" is a false pass in disguise.** Both config loaders swallowed a parse error into a note that
+  only POL-001 surfaced; every other policy check then evaluated defaults and reported `pass`. An external reviewer
+  reproduced it on 0.2.0 with one JSON5 hex literal (POL-004 open DMs HIGH → pass); Codex C5 #3 had predicted the same
+  class. The fix is structural, not per-check: `Settings.parse_error` is set by the loader, `require_config()` raises
+  `Skipped`, and the OpenClaw `_s()` helper calls it for every check. A new check that reads config gets the gate for free.
+- **A normaliser that "repairs" is a normaliser that lies.** `_json5` found no terminator and carried on; a truncated
+  config parsed as its prefix. Loaders must fail loudly on anything they did not fully understand.
+- **Match the vendor's loader, not a stricter or looser one.** `$include` was capped at depth 3 / 8 MiB with no boundary;
+  OpenClaw does 10 / 2 MB / config-dir-only. Either direction of mismatch computes findings from a config the daemon
+  does not run with. The boundary roots come from the target's `.env`, never the audit shell (same reasoning as M4's
+  process attribution and C5 #2's `OPENCLAW_CONFIG_PATH`).
+- **"Not running" and "can't tell" are different facts.** `_belongs_to` returned `False` when the process environment was
+  unreadable, so a locked-down box showed the gateway as absent and the RED probes quietly did less. It is tri-state now;
+  the target table says `unknown — pid N could not be attributed`, and NET-001/RED-* point at it.
+- **`--home` scanned anything.** `discover_hermes` accepted any directory; `daemonaudit scan --home /etc` produced a
+  "hermes" target. Both adapters now require a recognisable home; otherwise exit 3 with the expected markers named.
+- Real box after 0.2.1 (both daemons running): Hermes results byte-identical to 0.2.0; OpenClaw differs only by the
+  POL-003 retitle and the already-landed RED-001 UI-shell change. Zero check errors on either.
+
 ## Codex task queue
 
 Take the top unclaimed task. Mark it `claimed <date>` here, then `done <date> → reviews/codex/<file>` when the report is written.
@@ -263,7 +288,7 @@ is not enough and pin it. Two directions, both matter:
 Report: `reviews/codex/YYYY-MM-DD-evasion-skills.md` with a detection matrix like C2. No `src/` edits.
 Same idea against the skills scanner: `SKILL.md` and scripts that hide `curl | sh`, network calls, secret reads, and invisible-Unicode instructions in ways a regex misses.
 
-### C5 — OpenClaw adapter review  `[open]`
+### C5 — OpenClaw adapter review  `[closed 2026-08-29 → reviews/codex/2026-08-29-openclaw-review.md · answered in reviews/claude/2026-08-29-openclaw-review.md — all 5 items fixed in v0.2.1]`
 Review `src/daemonaudit/discover/openclaw.py`, `openclaw_config.py`, `_json5.py`, `checks/policy_openclaw.py` and `tests/test_openclaw.py`
 against AGENTS.md. Same brief as C1, plus:
 1. **Defaults.** Every "default" the checks assume (bind loopback, auth required, exec full/off, sandbox off, dmPolicy pairing, groupPolicy allowlist,

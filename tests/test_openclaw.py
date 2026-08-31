@@ -331,3 +331,236 @@ def test_red001_spa_shell_is_not_unauthenticated_api(oc_home):
         assert len(leak) == 1 and leak[0].severity == Severity.HIGH and "net:unauth:verified" in leak[0].tags
     finally:
         spa.shutdown(); api.shutdown()
+
+
+# --- v0.2.1: no false pass on a broken config; JSON5 completeness; C5 review items ---------------
+
+ALL_POLICY = tuple(f"POL-{i:03d}" for i in range(1, 11)) + ("ADV-001",)
+
+
+def test_json5_numbers_escapes_and_identifiers():
+    assert json5("{x: 0x1F, y: +5, z: .5, w: 5., v: -.25, u: -0xff, i: +Infinity}") == {"x": 31, "y": 5, "z": 0.5, "w": 5.0, "v": -0.25, "u": -255, "i": float("inf")}
+    assert json5("{s: 'it\\'s', d: \"it\\'s\", h: '\\x41', c: 'a\\\nb', $k: 1, _u: 2}") == {"s": "it's", "d": "it's", "h": "A", "c": "ab", "$k": 1, "_u": 2}
+    assert json5("{t: \"x // not a comment /* nor this */ : 0x10 ok\", n: [1, 2,],}") == {"t": "x // not a comment /* nor this */ : 0x10 ok", "n": [1, 2]}
+
+
+@pytest.mark.parametrize("bad", ["'unterminated", "{} /* unterminated", "{ nope", '{a: "x\ny"}', "{a: 0x}", "{a: 1 // c"])
+def test_json5_never_repairs_truncated_input(bad):
+    """A truncated config must not parse as its surviving prefix (Codex C5 #3)."""
+    with pytest.raises(ValueError):
+        json5(bad)
+
+
+@posix_only
+def test_unparsable_config_skips_every_policy_check(oc_home):
+    """Invariant #4: a config that does not parse is not a config that passes. Every OpenClaw policy
+    check skips with the parse note; the note reaches JSON, HTML and the terminal target table."""
+    _w(oc_home / "openclaw.json", "{ gateway: { bind: 'lan' }, channels: { telegram: { dmPolicy: 'open' } }, hooks: { enabled: true ")
+    r = _run(oc_home, OcPlat(oc_home))
+    st = {x.check_id: x for x in r.results}
+    for cid in ALL_POLICY:
+        assert st[cid].status == "skip" and "unparsable" in st[cid].note, (cid, st[cid])
+    assert not _by(r, "POL-004") and not _by(r, "POL-006") and not r.is_complete
+    assert "unparsable" in r.targets[0].meta["config_error"]
+    d = json.loads(to_json(r))
+    assert "unparsable" in d["targets"][0]["meta"]["config_error"] and any("unparsable" in n for n in d["targets"][0]["meta"]["notes"])
+    assert "unparsable" in render_html(r)
+    from io import StringIO
+    from rich.console import Console
+    buf = StringIO(); render(r, Console(file=buf, width=160, force_terminal=False), show_banner=False)
+    assert "unparsable" in buf.getvalue()
+    # a config whose root is not an object is the same class of failure
+    _w(oc_home / "openclaw.json", "[1, 2]")
+    r = _run(oc_home, OcPlat(oc_home))
+    assert all(x.status == "skip" and "not an object" in x.note for x in r.results if x.check_id in ALL_POLICY)
+
+
+def test_include_confinement_and_cycles(tmp_path, monkeypatch):
+    """`$include` obeys OpenClaw's boundary: the config dir plus OPENCLAW_INCLUDE_ROOTS from the
+    target's .env — never the audit shell's environment (Codex C5 #1)."""
+    plat = get_platform()
+    h = tmp_path / ".openclaw"; h.mkdir()
+    _w(tmp_path / "outside.json5", "{ leak: true }")
+    _w(h / "openclaw.json", '{ a: { $include: "../outside.json5" }, b: { $include: "inc/b.json5" }, c: { $include: 42 }, d: { $include: "list.json5" } }')
+    _w(h / "inc" / "b.json5", '{ ok: true, nested: { $include: "../loop.json5" } }')
+    _w(h / "loop.json5", '{ back: { $include: "inc/b.json5" } }')
+    _w(h / "list.json5", "[1]")
+    monkeypatch.setenv("OPENCLAW_INCLUDE_ROOTS", str(tmp_path))  # the audit shell's env must not widen the boundary
+    s = load_settings(discover_openclaw(plat, h), plat)
+    assert s.get("a.leak") is None and s.get("b.ok") is True and s.get("b.nested.back") == {} and s.get("d") == {}  # a refused include contributes nothing
+    notes = " | ".join(s.notes)
+    for needle in ("outside the config directory", "circular", "not a path", "not an object"):
+        assert needle in notes, needle
+    assert s.included == [h / "inc" / "b.json5", h / "loop.json5"]
+    # …but the target's own .env may name extra roots, exactly as the gateway reads them
+    _w(h / ".env", f"OPENCLAW_INCLUDE_ROOTS={tmp_path}\n")
+    s = load_settings(discover_openclaw(plat, h), plat)
+    assert s.get("a.leak") is True and "outside the config directory" not in " | ".join(s.notes)
+    # every refused include is a coverage note on every policy check: partial config ≠ clean
+    (h / ".env").unlink()
+    r = _run(h)
+    for cid in ALL_POLICY:
+        res = next(x for x in r.results if x.check_id == cid)
+        assert res.status in ("fail", "incomplete", "info") and "outside the config directory" in (res.note or ""), (cid, res.status, res.note)
+
+
+def test_include_depth_and_size_limits(tmp_path):
+    """10 nested levels are followed (OpenClaw's limit), the 11th is refused with a note; a file over
+    2 MB is refused, one under it is read."""
+    plat = get_platform()
+    h = tmp_path / ".openclaw"; h.mkdir()
+    _w(h / "openclaw.json", '{ next: { $include: "d1.json5" } }')
+    for i in range(1, 13):
+        _w(h / f"d{i}.json5", f'{{ l{i}: true, next: {{ $include: "d{i + 1}.json5" }} }}')
+    s = load_settings(discover_openclaw(plat, h), plat)
+    assert s.get("next." * 10 + "l10") is True and len(s.included) == 10
+    assert s.get("next." * 11 + "l11") is None and any("deeper than 10" in n for n in s.notes)
+    big = tmp_path / ".openclaw2"; big.mkdir()
+    _w(big / "openclaw.json", '{ a: { $include: "big.json5" }, b: { $include: "ok.json5" } }')
+    _w(big / "big.json5", '{ "pad": "' + "x" * (2 * 1024 * 1024) + '" }')
+    _w(big / "ok.json5", '{ "pad": "' + "x" * (2 * 1024 * 1024 - 32) + '", fine: true }')
+    s = load_settings(discover_openclaw(plat, big), plat)
+    assert s.get("a.pad") is None and s.get("b.fine") is True and any("big.json5" in n and "FileTooLarge" in n for n in s.notes)
+
+
+def test_config_path_env_is_not_attached_to_a_backup_home(tmp_path, monkeypatch):
+    """OPENCLAW_CONFIG_PATH belongs to the install the environment selects (Codex C5 #2)."""
+    plat = get_platform()
+    live = tmp_path / "live"; _w(live / "openclaw.json", '{ gateway: { bind: "lan" } }')
+    backup = tmp_path / "backup"; (backup / "agents").mkdir(parents=True); (backup / "credentials").mkdir()
+    monkeypatch.setenv("OPENCLAW_CONFIG_PATH", str(live / "openclaw.json"))
+    t = discover_openclaw(plat, backup)  # --home on a config-less copy
+    assert t.meta["config_path"] == str(backup / "openclaw.json") and load_settings(t, plat).get("gateway.bind") is None
+    monkeypatch.setenv("OPENCLAW_STATE_DIR", str(backup))
+    t = discover_openclaw(plat)  # the environment-selected home: the override is its own
+    assert t.meta["config_path"] == str(live / "openclaw.json") and load_settings(t, plat).get("gateway.bind") == "lan"
+    assert str(live / "openclaw.json") in t.layout.vault_files
+
+
+def _pol3(tmp_path, cfg: str):
+    h = tmp_path / ".openclaw"; h.mkdir(exist_ok=True)
+    _w(h / "openclaw.json", cfg)
+    return _by(_run(h), "POL-003")
+
+
+@posix_only
+def test_pol003_evaluates_every_agent_scope(tmp_path):
+    """Per-agent sandbox / exec / docker overrides count in both directions (Codex C5 #4)."""
+    fs = _pol3(tmp_path, '{ agents: { defaults: { sandbox: { mode: "all" } }, list: [ { id: "ops", sandbox: { mode: "off" } }, { id: "safe" } ] } }')
+    off = [f for f in fs if "sandbox.mode: off" in f.title]
+    assert len(off) == 1 and "agents.list[ops]" in off[0].title and "exec:host" in off[0].tags
+    assert not any("defaults" in e or "safe" in e for e in off[0].evidence)
+    fs = _pol3(tmp_path, '{ agents: { defaults: { sandbox: { mode: "off" } }, list: [ { id: "safe", sandbox: { mode: "all" } } ] } }')
+    off = [f for f in fs if "sandbox.mode: off" in f.title]
+    assert len(off) == 1 and "defaults" in off[0].title and not any("agents.list[safe]" in e for e in off[0].evidence)
+    fs = _pol3(tmp_path, '{ agents: { defaults: { sandbox: { mode: "all", docker: { network: "none" } } }, list: [ { id: "x", sandbox: { docker: { network: "host" } } } ] } }')
+    leaky = [f for f in fs if "reach the host" in f.title]
+    assert len(leaky) == 1 and leaky[0].severity == Severity.HIGH and any("agents.list[x]" in e and "network: host" in e for e in leaky[0].evidence)
+    assert not any("sandbox.mode: off" in f.title for f in fs)
+    fs = _pol3(tmp_path, '{ agents: { defaults: { sandbox: { mode: "non-main" } } } }')
+    assert len(fs) == 1 and fs[0].severity == Severity.LOW and "non-main" in fs[0].title and "exec:host" in fs[0].tags
+
+
+def _attr_plat(home, cmdline, env):
+    class P(OcPlat):
+        def find_processes(self, needle):
+            return [{"pid": 77, "cmdline": cmdline, "user": "x"}]
+
+        def process_env(self, pid):
+            if env is None:
+                raise NotSupported("denied")
+            return env
+    return P(home)
+
+
+NODE = "/usr/bin/node /x/node_modules/openclaw/openclaw.mjs gateway run"
+DIST = "/home/u/.nvm/versions/node/v24/bin/node /home/u/.nvm/versions/node/v24/lib/node_modules/openclaw/dist/index.js gateway --port 18789"
+
+
+@pytest.mark.parametrize("cmdline,env,home_rel,owned", [
+    (NODE, {"OPENCLAW_STATE_DIR": "{home}"}, ".openclaw", True),
+    (NODE.replace("/usr/bin/node", "/usr/bin/bun"), {"OPENCLAW_STATE_DIR": "{home}"}, ".openclaw", True),
+    (DIST, {"OPENCLAW_HOME": "{base}"}, ".openclaw", True),
+    (DIST, {"OPENCLAW_HOME": "{base}", "OPENCLAW_PROFILE": "work"}, ".openclaw-work", True),
+    (DIST, {"OPENCLAW_HOME": "{base}", "OPENCLAW_PROFILE": "work"}, ".openclaw", False),  # a profile's gateway is not the default home's
+    (DIST + " --dev", {"OPENCLAW_HOME": "{base}"}, ".openclaw-dev", True),
+    (DIST + " --dev", {"OPENCLAW_HOME": "{base}"}, ".openclaw", False),
+    (NODE, {"OPENCLAW_STATE_DIR": "/somewhere/else"}, ".openclaw", False),
+    ("/home/u/.local/bin/openclaw-doppler gateway", {"OPENCLAW_STATE_DIR": "{home}"}, ".openclaw", None),  # a wrapper is not the gateway; its exec'd child is
+])
+def test_process_attribution_matrix(tmp_path, cmdline, env, home_rel, owned):
+    home = tmp_path / home_rel; home.mkdir(); _w(home / "openclaw.json", "{}")
+    env = {k: v.format(home=home, base=tmp_path) for k, v in env.items()}
+    t = discover_openclaw(_attr_plat(home, cmdline, env), home)
+    assert t.pids == ([77] if owned else []) and t.meta["unattributed_pids"] == []
+
+
+@posix_only
+def test_unreadable_process_env_is_reported_not_silent(tmp_path):
+    """On a locked-down box the gateway shows as 'could not be attributed', never as 'not running'."""
+    home = tmp_path / ".openclaw"; home.mkdir(); _w(home / "openclaw.json", "{}")
+    plat = _attr_plat(home, DIST, None)
+    r = _run(home, plat, red=True)
+    t = r.targets[0]
+    assert t.pids == [] and t.meta["unattributed_pids"] == [77] and "could not be attributed" in t.meta["notes"][0]
+    net = next(f for f in _by(r, "NET-001") if "could not be attributed" in f.title)
+    assert net.severity == Severity.INFO and "pid 77" in net.title
+    for cid in ("RED-001", "RED-002"):
+        assert "could not be attributed" in next(x.note for x in r.results if x.check_id == cid)
+    assert "could not be attributed" in render_html(r) and "unknown — pid 77" in t.running_label()
+
+
+@posix_only
+def test_onboard_shaped_default_home_reports_only_graded_defaults(tmp_path):
+    """A fresh `openclaw onboard` install: loopback, token auth, pairing. Only the documented
+    single-operator defaults (exec full/off, sandbox off) and the literal-token hygiene note appear."""
+    h = tmp_path / ".openclaw"; h.mkdir(); os.chmod(h, 0o700)
+    _w(h / "openclaw.json", json.dumps({
+        "gateway": {"mode": "local", "bind": "loopback", "port": 18789, "auth": {"mode": "token", "token": "FAKE-onboard-token-0000000000000000"}},
+        "channels": {"telegram": {"botToken": FAKE_TELEGRAM, "dmPolicy": "pairing", "groupPolicy": "allowlist"}},
+        "logging": {"redactSensitive": "tools"},
+        "agents": {"defaults": {"workspace": "workspace"}},
+        "meta": {"lastTouchedVersion": "2026.7.1-2"},
+    }))
+    (h / "credentials").mkdir(); os.chmod(h / "credentials", 0o700)
+    _w(h / "agents" / "main" / "agent" / "auth-profiles.json", "{}")
+    (h / "workspace").mkdir()
+    r = _run(h, OcPlat(h))
+    assert not [x for x in r.results if x.status == "error"]
+    assert {f.check_id for f in r.actionable} <= {"POL-001", "POL-003", "POL-010"}, [(f.check_id, f.title) for f in r.actionable]
+    assert max(f.severity.rank for f in r.actionable) == Severity.MEDIUM.rank
+    assert "(default)" in next(f for f in _by(r, "POL-001") if "without approval" in f.title).evidence[0]
+    assert not r.attack_paths
+
+
+@posix_only
+def test_pol010_secretref_objects_are_references(tmp_path):
+    """SecretRef objects (env / file / exec sources) are not literal credentials; their ids never
+    appear as evidence, and the one real literal is redacted."""
+    h = tmp_path / ".openclaw"; h.mkdir()
+    _w(h / "openclaw.json", json.dumps({
+        "gateway": {"auth": {"mode": "token", "token": {"source": "env", "provider": "default", "id": "OPENCLAW_GATEWAY_TOKEN"}}},
+        "channels": {"telegram": {"botToken": {"source": "file", "provider": "default", "id": "/secrets/telegram-token"}}},
+        "models": {"providers": {"xai": {"apiKey": {"source": "exec", "provider": "op", "id": "op://vault/xai/credential"}}, "anthropic": {"apiKey": FAKE_ANTHROPIC}}},
+    }))
+    r = _run(h)
+    fs = _by(r, "POL-010")
+    assert len(fs) == 1
+    ev = " ".join(fs[0].evidence)
+    assert "models.providers.anthropic.apiKey" in ev and FAKE_ANTHROPIC not in ev
+    assert not any(x in ev for x in ("OPENCLAW_GATEWAY_TOKEN", "/secrets/telegram-token", "op://"))
+    assert FAKE_ANTHROPIC not in to_json(r)
+
+
+@posix_only
+def test_workspace_that_is_home_is_not_walked_for_sprawl(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    h = tmp_path / ".openclaw"; h.mkdir()
+    _w(h / "openclaw.json", '{ agents: { defaults: { workspace: "~" } } }')
+    _w(tmp_path / "other-project" / ".env", f"GITHUB_TOKEN={FAKE_GITHUB}\n")
+    t = discover_openclaw(get_platform(), h)
+    assert str(tmp_path) not in t.layout.sprawl_paths and "your home directory" in t.layout.coverage_notes[0]
+    assert any(Path(s) == tmp_path / "skills" for s in t.layout.skills_dirs)  # skills/context under it are still specific paths
+    r = _run(h)
+    assert not any("other-project" in f.asset for f in _by(r, "SEC-001"))
+    assert "not walked for secret sprawl" in next(x.note for x in r.results if x.check_id == "SEC-001")

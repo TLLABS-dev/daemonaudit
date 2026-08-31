@@ -105,7 +105,8 @@ def test_verify_cmds_are_quoted_and_platform_aware(tmp_path):
 # --- #8 CLI never leaks a traceback; documented exit codes ---
 def test_cli_no_target_and_operational_error(tmp_path, capsys):
     assert main(["scan", "--home", str(tmp_path / "nope")]) == 3
-    home = tmp_path / "h"; home.mkdir()
+    assert main(["scan", "--home", str(tmp_path)]) == 3  # a directory that is not a daemon home is never scanned as one
+    home = tmp_path / "h"; home.mkdir(); (home / "config.yaml").write_text("{}\n")
     rc = main(["scan", "--home", str(home), "--json", str(tmp_path / "no-such-dir" / "out.json")])
     err = capsys.readouterr().err
     assert rc == 5 and "Traceback" not in err and "daemonaudit:" in err

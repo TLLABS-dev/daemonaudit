@@ -80,9 +80,15 @@ def load_hermes_settings(target: Target, plat: Platform) -> HermesSettings:
     if text is not None:
         try:
             loaded = yaml.safe_load(text)
-            s.cfg = loaded if isinstance(loaded, dict) else {}
         except yaml.YAMLError as e:
-            s.notes.append(f"config.yaml unreadable: {e.__class__.__name__}")
+            loaded = None
+            s.parse_error = f"config.yaml unparsable ({e.__class__.__name__}); checks that read it were skipped, not passed"
+        if isinstance(loaded, dict):
+            s.cfg = loaded
+        elif loaded is not None and s.parse_error is None:
+            s.parse_error = f"config.yaml is a {type(loaded).__name__}, not a mapping; checks that read it were skipped, not passed"
+        if s.parse_error:
+            s.notes.append(s.parse_error)
     text = read_text_nofollow(plat, target.home / ".env", 4 * 1024 * 1024, s.notes, ".env")
     if text is not None:
         s.dotenv = parse_dotenv(text)

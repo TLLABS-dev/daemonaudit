@@ -33,8 +33,14 @@ MASTER_ENV = re.compile(r"^(ANTHROPIC|OPENAI|OPENROUTER|GITHUB|GH|AWS|AZURE|GOOG
 MIN_TOKEN_LEN = 24
 
 
-def _s(target: Target, plat: Platform) -> OpenClawSettings:
-    return load_settings(target, plat)  # type: ignore[return-value]
+def _s(target: Target, plat: Platform, out: CheckOutput) -> OpenClawSettings:
+    """Settings for a policy check. An unparsable openclaw.json raises Skipped here — the check
+    never evaluates defaults and calls them a pass (AGENTS.md §4). Loader notes (refused
+    `$include`s, unreadable .env) become coverage notes so a partial config never reads as clean."""
+    s: OpenClawSettings = load_settings(target, plat)  # type: ignore[assignment]
+    s.require_config()
+    out.coverage_notes += [n for n in s.notes if n not in out.coverage_notes]
+    return s
 
 
 def _cfg(target: Target) -> str:
@@ -107,8 +113,7 @@ def _scopes(s: OpenClawSettings, approvals: dict) -> list[tuple[str, dict[str, A
 @check("POL-001", "Dangerous-command approval bypassed (yolo / exec-ask off)", Position.CONTENT, frameworks=FW)
 def approval_bypass(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
-    out.coverage_notes += s.notes
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     ap = _approvals(target, plat, out)
     yolo, fallback_full, auto_skills, lax_interp = [], [], [], []
@@ -166,7 +171,7 @@ def approval_bypass(target: Target, plat: Platform) -> CheckOutput:
 @check("POL-002", "Approval policy weakened in config", Position.CONTENT, frameworks=FW)
 def approvals_config(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     ap = _approvals(target, plat, out)
     broad: list[str] = []
@@ -222,48 +227,75 @@ def approvals_config(target: Target, plat: Platform) -> CheckOutput:
 
 # --- POL-003 execution sandbox ----------------------------------------------------------
 
+def _dangerous_docker(docker: dict) -> list[str]:
+    bad: list[str] = []
+    if docker.get("network") in ("host",) or str(docker.get("network", "")).startswith("container:"):
+        bad.append(f"network: {docker.get('network')}")
+    for b in docker.get("binds") if isinstance(docker.get("binds"), list) else []:
+        src = str(b).split(":", 1)[0]
+        if any(src == d or src.endswith(d) or f"/{d.strip('/')}/" in src + "/" for d in DANGEROUS_BIND_SOURCES):
+            bad.append(f"binds: {str(b)[:60]}")
+    for k in ("dangerouslyAllowReservedContainerTargets", "dangerouslyAllowExternalBindSources", "dangerouslyAllowContainerNamespaceJoin"):
+        if docker.get(k) is True:
+            bad.append(f"{k}: true")
+    so = docker.get("securityOpt") if isinstance(docker.get("securityOpt"), list) else []
+    if any("seccomp=unconfined" in str(x) or "apparmor=unconfined" in str(x) for x in so):
+        bad.append("securityOpt: unconfined")
+    return bad
+
+
 @check("POL-003", "Agent executes directly on the host without a write boundary", Position.CONTENT, frameworks=FW)
 def unsandboxed(target: Target, plat: Platform) -> CheckOutput:
+    """Evaluated per scope: `agents.defaults` (every agent without its own entry, including main)
+    and each `agents.list[]` entry, which may override `sandbox` and `tools.exec` in either
+    direction (Codex C5 #4). One content-reachable agent on the host is enough for `exec:host`."""
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
-    mode = s.sandbox_mode()
-    host = str(s.exec_policy().get("host") or "auto")
     ws_only = s.get("tools.fs.workspaceOnly") is True
-    if mode == "off" and host != "node":
-        out.findings.append(_f("POL-003", f"agents.defaults.sandbox.mode: {mode} — exec and file tools run on this host as you",
+    on_host: list[str] = []
+    main_on_host: list[str] = []
+    drift: list[str] = []
+    leaky: list[str] = []
+    for label, entry in s.sandbox_scopes():
+        where = "agents.defaults" if entry is None else f"agents.list[{label}]"
+        mode = s.sandbox_mode(entry)
+        host = str(s.exec_policy(entry).get("host") or "auto")
+        if mode == "off" and host != "node":
+            on_host.append(f"{where}: sandbox.mode: off, tools.exec.host: {host}")
+        elif mode == "non-main" and entry is None:
+            main_on_host.append(f"{where}: sandbox.mode: non-main — the main agent runs on the host")
+        if host == "sandbox" and mode == "off":
+            drift.append(f"{where}: tools.exec.host: sandbox, sandbox.mode: off")
+        if mode != "off":
+            leaky += [f"{where}.sandbox.docker.{b}" for b in _dangerous_docker(s.sandbox_docker(entry))]
+    if on_host:
+        scopes = ", ".join("the defaults (every agent without an override, incl. main)" if e.startswith("agents.defaults") else e.split(":", 1)[0] for e in on_host)
+        out.findings.append(_f("POL-003", f"sandbox.mode: off — exec and file tools run on this host as you ({scopes})",
             Severity.MEDIUM if not ws_only else Severity.LOW, Position.CONTENT, cfg,
             "With sandboxing off, tools.exec.host `auto` resolves to the gateway host: commands run as your user with your whole home directory "
             "reachable (OpenClaw: sandbox.docker_config_mode_off). " + ("tools.fs.workspaceOnly limits the *file* tools to the workspace, but exec is unconstrained." if ws_only else
             "Nothing limits the file tools either (tools.fs.workspaceOnly is unset)."),
-            "Set agents.defaults.sandbox.mode: \"all\" (or \"non-main\") with the Docker backend, and tools.fs.workspaceOnly: true. "
+            "Set agents.defaults.sandbox.mode: \"all\" (or \"non-main\") with the Docker backend, and tools.fs.workspaceOnly: true; "
+            "a per-agent agents.list[].sandbox.mode: \"off\" re-opens the host for that agent, so check every entry. "
             "If you stay on the host, keep tools.exec in allowlist/ask mode (POL-001).",
-            "openclaw config get agents.defaults.sandbox.mode; openclaw sandbox list",
-            [f"agents.defaults.sandbox.mode: {mode}", f"tools.exec.host: {host}", f"tools.fs.workspaceOnly: {ws_only}"], ["exec:host"]))
-    if host == "sandbox" and mode == "off":
+            "openclaw config get agents; openclaw sandbox list",
+            on_host + [f"tools.fs.workspaceOnly: {ws_only}"], ["exec:host"]))
+    if main_on_host:
+        out.findings.append(_f("POL-003", "sandbox.mode: non-main — the main agent still executes on this host", Severity.LOW, Position.CONTENT, cfg,
+            "Only non-main agents are sandboxed; the agent you talk to most runs commands on the gateway host as you. A deliberate middle ground, "
+            "listed so the attack-path rules know the host is reachable through it.",
+            "Use sandbox.mode: \"all\" if the main agent handles untrusted content (channels, hooks, web).", "openclaw config get agents.defaults.sandbox",
+            main_on_host, ["exec:host"]))
+    if drift:
         out.findings.append(_f("POL-003", "tools.exec.host: sandbox while sandbox mode is off — exec fails closed", Severity.LOW, Position.CONTENT, cfg,
             "Not a hole, a drift: exec calls will fail until a sandbox runtime exists (OpenClaw: tools.exec.host_sandbox_no_sandbox_defaults).",
-            "Enable the sandbox or set tools.exec.host: gateway explicitly.", None, [f"tools.exec.host: {host}", f"sandbox.mode: {mode}"]))
-    docker = s.get("agents.defaults.sandbox.docker") if isinstance(s.get("agents.defaults.sandbox.docker"), dict) else {}
-    if mode != "off" and docker:
-        bad: list[str] = []
-        if docker.get("network") in ("host",) or str(docker.get("network", "")).startswith("container:"):
-            bad.append(f"docker.network: {docker.get('network')}")
-        for b in docker.get("binds") if isinstance(docker.get("binds"), list) else []:
-            src = str(b).split(":", 1)[0]
-            if any(src == d or src.endswith(d) or f"/{d.strip('/')}/" in src + "/" for d in DANGEROUS_BIND_SOURCES):
-                bad.append(f"docker.binds: {str(b)[:60]}")
-        for k in ("dangerouslyAllowReservedContainerTargets", "dangerouslyAllowExternalBindSources", "dangerouslyAllowContainerNamespaceJoin"):
-            if docker.get(k) is True:
-                bad.append(f"docker.{k}: true")
-        so = docker.get("securityOpt") if isinstance(docker.get("securityOpt"), list) else []
-        if any("seccomp=unconfined" in str(x) or "apparmor=unconfined" in str(x) for x in so):
-            bad.append("docker.securityOpt: unconfined")
-        if bad:
-            out.findings.append(_f("POL-003", "Sandbox is configured, but the container can reach the host", Severity.HIGH, Position.CONTENT, cfg,
-                "Host networking, bind-mounting credential directories or the Docker socket, or unconfined seccomp/AppArmor makes the sandbox decorative "
-                "(OpenClaw: sandbox.dangerous_*).", "Remove the listed docker settings; use network: none and workspace-only binds.",
-                "openclaw config get agents.defaults.sandbox.docker", bad[:10], ["exec:host"]))
+            "Enable the sandbox or set tools.exec.host: gateway explicitly.", None, drift))
+    if leaky:
+        out.findings.append(_f("POL-003", "Sandbox is configured, but the container can reach the host", Severity.HIGH, Position.CONTENT, cfg,
+            "Host networking, bind-mounting credential directories or the Docker socket, or unconfined seccomp/AppArmor makes the sandbox decorative "
+            "(OpenClaw: sandbox.dangerous_*). Per-agent docker overrides count too.", "Remove the listed docker settings; use network: none and workspace-only binds.",
+            "openclaw config get agents", leaky[:10], ["exec:host"]))
     return out
 
 
@@ -272,7 +304,7 @@ def unsandboxed(target: Target, plat: Platform) -> CheckOutput:
 @check("POL-004", "Anyone may message the agent (allow-all users)", Position.CONTENT, frameworks=FW)
 def allow_all_users(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     chans = s.get("channels") if isinstance(s.get("channels"), dict) else {}
     open_dm, star, open_group, name_match = [], [], [], []
@@ -329,7 +361,7 @@ def allow_all_users(target: Target, plat: Platform) -> CheckOutput:
 @check("POL-005", "Gateway exposed beyond loopback or unauthenticated", Position.REMOTE, frameworks=FW)
 def gateway_exposure(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     if s.get("gateway.mode") == "remote":
         out.findings.append(_f("POL-005", "gateway.mode: remote — this install is a client of a gateway elsewhere", Severity.INFO, Position.REMOTE, cfg,
@@ -451,7 +483,7 @@ def gateway_exposure(target: Target, plat: Platform) -> CheckOutput:
 @check("POL-006", "Inbound webhook or dashboard without verification/auth", Position.REMOTE, frameworks=FW)
 def webhooks(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     hooks = s.get("hooks") if isinstance(s.get("hooks"), dict) else {}
     if hooks.get("enabled") is True:
@@ -500,7 +532,7 @@ def webhooks(target: Target, plat: Platform) -> CheckOutput:
 @check("POL-007", "Secret redaction off or request dumping on", Position.LOCAL, frameworks=FW)
 def debug_leaks(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     vault = target.vault_path
     if s.get("logging.redactSensitive") == "off":
@@ -539,7 +571,7 @@ def debug_leaks(target: Target, plat: Platform) -> CheckOutput:
 @check("POL-008", "Content-safety guards disabled (SSRF, unsafe external content, plugins)", Position.CONTENT, frameworks=FW)
 def content_guards(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     ssrf = s.get("browser.ssrfPolicy") if isinstance(s.get("browser.ssrfPolicy"), dict) else {}
     if ssrf.get("dangerouslyAllowPrivateNetwork") is True or ssrf.get("allowPrivateNetwork") is True:
@@ -591,7 +623,7 @@ def content_guards(target: Target, plat: Platform) -> CheckOutput:
 @check("POL-009", "Provider credentials forwarded into tool/skill shells", Position.SUPPLY_CHAIN, frameworks=FW)
 def env_passthrough(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     leaked: list[str] = []
     entries = s.get("skills.entries") if isinstance(s.get("skills.entries"), dict) else {}
@@ -634,7 +666,7 @@ def _walk_strings(node: Any, path: str = ""):
 @check("POL-010", "Literal secrets in config (mcp.servers env, tokens, keys)", Position.LOCAL, frameworks=FW)
 def literal_secrets(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     mcp: list[str] = []
     other: list[str] = []
@@ -666,7 +698,7 @@ def literal_secrets(target: Target, plat: Platform) -> CheckOutput:
 @check("ADV-001", "Outdated daemon or dismissed security advisories", Position.CONTENT, frameworks=FW)
 def advisories(target: Target, plat: Platform) -> CheckOutput:
     out = CheckOutput()
-    s = _s(target, plat)
+    s = _s(target, plat, out)
     cfg = _cfg(target)
     if s.get("update.checkOnStart") is False:
         out.findings.append(_f("ADV-001", "update.checkOnStart: false — the gateway never learns about new releases", Severity.LOW, Position.CONTENT, cfg,

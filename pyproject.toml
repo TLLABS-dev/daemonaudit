@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "daemonaudit"
-version = "0.2.0"
+version = "0.2.1"
 description = "Red/blue security audit for self-hosted AI agent daemons. Finds the secrets, the open doors, and the blast radius."
 readme = "README.md"
 license = "MIT"
@@ -18,6 +18,11 @@ classifiers = [
   "Intended Audience :: System Administrators",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Operating System :: OS Independent",
   "Topic :: Security",
 ]
 dependencies = [
@@ -34,6 +39,9 @@ daemonaudit = "daemonaudit.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/TLLABS-dev/daemonaudit"
+Repository = "https://github.com/TLLABS-dev/daemonaudit"
+Issues = "https://github.com/TLLABS-dev/daemonaudit/issues"
+Changelog = "https://github.com/TLLABS-dev/daemonaudit/blob/master/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/daemonaudit"]

@@ -61,6 +61,7 @@ def _candidate_files(target: Target):
 def secrets_outside_vault(target: Target, plat: Platform) -> CheckOutput:
     home, lay = target.home, target.layout
     out = CheckOutput()
+    out.coverage_notes += lay.coverage_notes  # e.g. a workspace that is $HOME — deliberately not walked
     inspected = 0
     for path in _candidate_files(target):
         hits, reason = scan_file(plat, path)

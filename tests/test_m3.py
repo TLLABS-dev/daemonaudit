@@ -172,10 +172,11 @@ def test_discovery_does_not_attribute_foreign_processes(tmp_path):
             return [{"pid": 1, "cmdline": "/home/someone/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main gateway run", "user": "x"}]
         def process_env(self, pid):
             raise NotSupported("denied")
-    home = tmp_path / "demo"; home.mkdir()
+    home = tmp_path / "demo"; home.mkdir(); (home / "config.yaml").write_text("{}\n")
     t = discover_hermes(P(), home)
     assert t.pids == [] and t.meta["gateway_pids"] == []
-    mine = tmp_path / "mine"; mine.mkdir()
+    assert t.meta["unattributed_pids"] == [1] and "could not be attributed" in t.meta["notes"][0]  # said, not silent
+    mine = tmp_path / "mine"; mine.mkdir(); (mine / "config.yaml").write_text("{}\n")
     class Q(P):
         def find_processes(self, needle):
             return [{"pid": 2, "cmdline": f"{mine}/hermes-agent/venv/bin/python -m hermes_cli.main gateway run", "user": "x"}]
@@ -189,5 +190,6 @@ def test_discovery_ignores_non_python_mentions(tmp_path):
             return [{"pid": 9, "cmdline": f"/bin/bash -c grep hermes_cli {tmp_path}/mine/notes", "user": "x"}]
         def process_env(self, pid):
             raise NotSupported("denied")
-    home = tmp_path / "mine"; home.mkdir()
-    assert discover_hermes(P(), home).pids == []
+    home = tmp_path / "mine"; home.mkdir(); (home / "config.yaml").write_text("{}\n")
+    t = discover_hermes(P(), home)
+    assert t.pids == [] and t.meta["unattributed_pids"] == []  # not a candidate at all, so nothing to attribute

@@ -9,11 +9,23 @@ secrets, the open doors and the weak policies on the machine your agent runs on,
 you the **attack paths** and the **blast radius**: what an attacker gets, from where, and
 which single fix kills the whole chain.
 
-Supports **Hermes Agent** and **OpenClaw** (v0.2). Both are found automatically; a box running both gets one report. Generic MCP configs are on the roadmap.
+Supports **Hermes Agent** and **OpenClaw**. Both are found automatically; a box running both gets one report. Generic MCP configs are on the roadmap.
 
-![daemonaudit scan --red](assets/demo-report.svg)
+## Install
+```bash
+uvx daemonaudit scan --red          # zero-install run
+pipx install daemonaudit            # or: pip install daemonaudit
+```
+Requires Python ≥ 3.10. Dependencies: `psutil`, `rich`, `pyyaml`. Linux, macOS and Windows.
+From a clone: `python -m pip install -e '.[dev]'`.
 
-*(above: `daemonaudit scan --red` against a deliberately-broken demo home — build your own with `python scripts/demo_home.py`)*
+## What it looks like
+
+| Hermes demo home | OpenClaw demo home |
+|---|---|
+| ![daemonaudit scan --red on a Hermes demo home](assets/demo-report.svg) | ![daemonaudit scan --red on an OpenClaw demo home](assets/demo-report-openclaw.svg) |
+
+*Both are `daemonaudit scan --red` against a deliberately-broken demo home with fake credentials — build your own with `python scripts/demo_home.py [--openclaw]`.*
 
 ## Why not just the built-in audit?
 Framework auditors ask *"is my config right?"*. `daemonaudit` asks *"what does an attacker
@@ -21,19 +33,6 @@ standing here actually get?"* — and it looks at the **host**, not just the con
 transcripts, sqlite state, process environments, listening sockets, and the skills you installed.
 Then it **chains** the findings: an exposed port *plus* an unsandboxed backend *plus* keys in the
 environment is one attack path, and it names the one hop whose fix breaks it.
-
-## Install
-```bash
-uvx --from git+https://github.com/TLLABS-dev/daemonaudit daemonaudit scan     # zero-install run
-# or
-pipx install git+https://github.com/TLLABS-dev/daemonaudit
-```
-From a clone:
-```bash
-python -m pip install -e '.[dev]'
-daemonaudit scan
-```
-Requires Python ≥ 3.10. Dependencies: `psutil`, `rich`, `pyyaml`. Linux, macOS and Windows.
 
 ## Use
 ```bash
@@ -48,7 +47,13 @@ listeners to see which answer without a password, reads the daemon's process env
 reads the vault the way any process running as you could — to measure the real local blast radius.
 
 ## What it checks
-The same check ids mean the same class of weakness on every framework; each framework has its own implementation where the config differs.
+21 checks in seven areas — **SEC** secrets outside the vault · **PERM** file permissions · **NET** listeners and sockets ·
+**POL** policy (approvals, sandbox, who may talk to the agent, exposure, webhooks, debug leaks, content guards,
+credential passthrough, literal secrets) · **SKILL** risky skills and context files · **ADV** freshness · **RED** localhost probes.
+The same check id means the same class of weakness on every framework; each framework has its own implementation where the config differs.
+
+<details>
+<summary><b>Full check matrix — what each id reads on Hermes and on OpenClaw</b></summary>
 
 | id | Hermes | OpenClaw |
 |---|---|---|
@@ -57,7 +62,7 @@ The same check ids mean the same class of weakness on every framework; each fram
 | **NET-001/002** listeners & sockets | api server / webhook / CDP ports | gateway port (`gateway.port`, default 18789) and the browser control port |
 | **POL-001** approval bypass | `HERMES_YOLO_MODE`, `HERMES_EXEC_ASK`, `--yolo` in units | `tools.exec` security=full + ask=off (incl. the trusted-operator default, graded MEDIUM), `exec-approvals.json` askFallback/autoAllowSkills, interpreters without `strictInlineEval` |
 | **POL-002** approvals config | `approvals.mode`, cron/one-shot auto-approve, broad allowlists | broad exec allowlist patterns, `tools.elevated` wildcards, `/bash`, interpreters as `safeBins` |
-| **POL-003** host execution | `terminal.backend: local` without a write root | `sandbox.mode: off`, `tools.exec.host` drift, dangerous Docker binds/network/seccomp |
+| **POL-003** host execution | `terminal.backend: local` without a write root | `sandbox.mode: off` / `non-main` per agent scope (defaults and every `agents.list[]` override), `tools.exec.host` drift, dangerous Docker binds/network/seccomp |
 | **POL-004** allow-all users | `*_ALLOW_ALL_USERS` | `dmPolicy: open`, `allowFrom: ["*"]`, `groupPolicy: open`, name matching, `session.dmScope: main` with several senders |
 | **POL-005** exposed / unauthenticated service | API server host/key/CORS | `gateway.bind`, `gateway.auth.mode`, short tokens, Tailscale funnel, Control-UI device-auth/origins bypasses, trusted-proxy misconfig, `gateway.tools.allow`, node commands, mDNS full |
 | **POL-006** webhooks & dashboard | WhatsApp/Telegram webhook secrets, dashboard auth | `hooks.token` missing/short/reused, `hooks.path: /`, caller-chosen session keys, Telegram/Zalo webhook secrets, admin-http-rpc without auth |
@@ -69,6 +74,8 @@ The same check ids mean the same class of weakness on every framework; each fram
 | **ADV-001** freshness | `.update_check` cache, acked advisories | `update.checkOnStart`, `security.audit.suppressions`, CLI/config version drift |
 | **RED-001/002/003** probes | unauthenticated HTTP, process env, vault | same; the Control UI / `/health` paths are expected to answer anonymously and are reported as such, not as findings |
 
+</details>
+
 Where OpenClaw's own `openclaw security audit` has a matching checkId, the finding names it. daemonaudit adds what that audit does not look at: the host (transcripts, sqlite, backups, process environments, listeners), the skills you installed, and the chaining into attack paths.
 
 Each finding says **why it matters**, the exact **fix**, and a command to **verify** it.
@@ -77,7 +84,7 @@ Each finding says **why it matters**, the exact **fix**, and a command to **veri
 - **Read-only.** It never changes your system.
 - **Zero network egress.** Nothing leaves the box. The active probes connect to localhost only, and refuse any target that isn't this host.
 - **Redacted by construction.** The report can show you `sk-ant-…4f2a`; it cannot show you the key. Nothing that leaves the process — terminal, JSON, HTML — contains a raw credential.
-- **No false passes.** A check that can't run says *skipped*, never *ok*. A scan that couldn't complete exits non-zero.
+- **No false passes.** A check that can't run says *skipped*, never *ok*. A config file that doesn't parse skips every check that reads it — it never evaluates defaults and calls them a pass. A scan that couldn't complete exits non-zero.
 
 ## Exit codes (for cron / CI)
 | code | meaning |
@@ -93,14 +100,14 @@ Precedence 2 > 1 > 4 > 0. INFO-only findings don't affect the exit code.
 
 ## Roadmap
 - **v0.1** — Hermes: secrets, permissions, policy, skills, exposed services, localhost red probes, attack-path report. Linux · macOS · Windows.
-- **v0.2** — OpenClaw adapter (this release): same checks, same attack-path rules, both daemons in one report.
+- **v0.2** — OpenClaw adapter: same checks, same attack-path rules, both daemons in one report. **v0.2.1** closes the "config doesn't parse → pass" hole on both frameworks and aligns `$include`, config-path and per-agent sandbox handling with OpenClaw's own rules ([CHANGELOG](CHANGELOG.md)).
 - **next** — generic MCP config adapter, traversal-aware permission grading, the framework's own executable tree, canary-injection probe, local-LLM (Ollama) semantic skill review, guided remediation with rollback, richer Windows ACL model, continuous monitoring / drift alerts.
 
 ## Development
 `pytest` runs the suite (Linux/macOS/Windows in CI). The design invariants live in
-[`AGENTS.md`](AGENTS.md); the plan and history in [`BUILD.md`](BUILD.md). Built with a two-model
-workflow — one model builds, another reviews and writes adversarial fixtures; the review
-rounds are under [`reviews/`](reviews/).
+[`AGENTS.md`](AGENTS.md); the plan and history in [`BUILD.md`](BUILD.md); releases in
+[`CHANGELOG.md`](CHANGELOG.md). Built with a two-model workflow — one model builds, another reviews
+and writes adversarial fixtures; the review rounds are under [`reviews/`](reviews/).
 
 ## License
 MIT — see [LICENSE](LICENSE).

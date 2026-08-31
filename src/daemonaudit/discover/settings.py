@@ -18,6 +18,7 @@ from typing import Any
 
 from daemonaudit.model import Target
 from daemonaudit.platform import NotSupported, Platform
+from daemonaudit.registry import Skipped
 
 TRUTHY = {"1", "true", "yes", "on"}
 FALSY = {"0", "false", "no", "off"}
@@ -72,7 +73,15 @@ class Settings:
     notes: list[str] = field(default_factory=list)  # coverage notes for checks to surface
     home: Path = Path(".")
     config_path: Path | None = None
+    # Set when the config file exists but could not be parsed (or is not a mapping). `cfg` is then
+    # empty, and every value a check would read from it is a *default*, not a fact about this install.
+    parse_error: str | None = None
 
+    def require_config(self) -> None:
+        """Policy checks call this before reading `cfg`. AGENTS.md §4: a check that cannot run
+        raises Skipped; it never evaluates defaults and reports them as a pass."""
+        if self.parse_error:
+            raise Skipped(self.parse_error)
 
     # --- config mapping ---
     def get(self, dotted: str, default: Any = None) -> Any:

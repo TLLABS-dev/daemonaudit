@@ -40,7 +40,21 @@ def listeners(target: Target, plat: Platform) -> CheckOutput:
     sockets = plat.listening_sockets()  # NotSupported → registry marks skip
     ours = [s for s in sockets if (s["pid"] in pids) or (s["port"] in port_names)]
 
-    if not target.pids:
+    if not target.pids and target.unattributed_pids:
+        out.findings.append(
+            Finding(
+                check_id="NET-001",
+                title=f"A {fw} process is running (pid {', '.join(map(str, target.unattributed_pids))}) but could not be attributed to this home",
+                severity=Severity.INFO,
+                position=Position.REMOTE,
+                asset=str(target.home),
+                why="Its process environment could not be read, so daemonaudit cannot tell whether it serves this home or another install. "
+                    "It is treated as not this install's; only well-known daemon ports were checked and the process probes did not run.",
+                fix="Re-run as the user the daemon runs as (or with elevated privileges) so the process environment is readable.",
+                verify_cmd=f"ps -o user,pid,cmd -p {target.unattributed_pids[0]}",
+            )
+        )
+    elif not target.pids:
         out.findings.append(
             Finding(
                 check_id="NET-001",

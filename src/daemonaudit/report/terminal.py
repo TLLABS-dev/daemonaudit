@@ -39,11 +39,15 @@ def render(report: ScanReport, console: Console | None = None, show_banner: bool
     if show_banner:
         con.print(Text(banner(), style="magenta"))
 
+    notes_any = any(tg.meta.get("notes") for tg in report.targets)
     t = Table(title="Targets", expand=False)
-    for col in ("framework", "home", "version", "running pids"):
+    for col in ("framework", "home", "version", "running pids") + (("notes",) if notes_any else ()):
         t.add_column(col)
     for tg in report.targets:
-        t.add_row(T(tg.framework), T(tg.home), T(tg.version or "?"), T(", ".join(map(str, tg.pids)) or "not running"))
+        cells = [T(tg.framework), T(tg.home), T(tg.version or "?"), T(tg.running_label(), "" if tg.pids or not tg.unattributed_pids else "yellow")]
+        if notes_any:
+            cells.append(T("\n".join(tg.meta.get("notes") or []), "yellow"))
+        t.add_row(*cells)
     con.print(t)
 
     if report.attack_paths:

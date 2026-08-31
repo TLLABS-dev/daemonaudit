@@ -187,6 +187,7 @@ class Layout:
     http_ui_paths: tuple[str, ...] = ()  # paths that legitimately serve a static UI shell to anyone (2xx is not a finding)
     process_needle: str = ""  # substring that pre-filters candidate daemon processes
     display_name: str = "the daemon"  # how finding text names the framework
+    coverage_notes: list[str] = field(default_factory=list)  # what discovery chose not to walk, and why (SEC-001 surfaces these)
 
     def is_backup(self, name: str) -> bool:
         return any(m in name if m.startswith(".") else name.endswith(m) for m in self.backup_markers)
@@ -204,6 +205,18 @@ class Target:
     @property
     def vault_path(self) -> Path:
         return self.home / self.layout.preferred_vault
+
+    @property
+    def unattributed_pids(self) -> list[int]:
+        """Daemon-shaped processes discovery could not attribute to this home (env unreadable)."""
+        return list(self.meta.get("unattributed_pids") or [])
+
+    def running_label(self) -> str:
+        if self.pids:
+            return ", ".join(map(str, self.pids))
+        if self.unattributed_pids:
+            return f"unknown — pid {', '.join(map(str, self.unattributed_pids))} could not be attributed"
+        return "not running"
 
     def to_dict(self) -> dict[str, Any]:
         return {

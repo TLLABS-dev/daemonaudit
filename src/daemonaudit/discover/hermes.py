@@ -54,6 +54,10 @@ def hermes_home(override: str | os.PathLike | None = None) -> Path:
     return Path.home() / ".hermes"
 
 
+def looks_like_hermes(home: Path) -> bool:
+    return any((home / n).exists() for n in ("config.yaml", ".env", "hermes-agent", "auth.json", "state.db", "sessions"))
+
+
 def _version(home: Path) -> str | None:
     pyproject = home / "hermes-agent" / "pyproject.toml"
     try:
@@ -67,21 +71,22 @@ def _is_hermes_proc(proc: dict) -> bool:
     return bool(GATEWAY_RE.search(proc.get("cmdline") or ""))
 
 
-def _belongs_to(proc: dict, home: Path, plat: Platform) -> bool:
-    """Attribute a hermes_cli process to *this* home only.
+def _belongs_to(proc: dict, home: Path, plat: Platform) -> bool | None:
+    """Attribute a hermes_cli process to *this* home only: True / False / None = cannot tell.
 
     The gateway runs from `<home>/hermes-agent/venv/bin/python`, so the interpreter
     path in the cmdline names the home. Fall back to the process's HERMES_HOME if we
     may read its environment. A process we cannot attribute is not ours — scanning
-    a demo or backup home must never probe the real daemon.
+    a demo or backup home must never probe the real daemon — but the caller records
+    the None so the report says "attribution failed", not "not running".
     """
     cmd = proc.get("cmdline") or ""
     if str(home) in cmd:
         return True
     try:
         env = plat.process_env(proc["pid"])
-    except Exception:  # noqa: BLE001 - NotSupported / gone
-        return False
+    except Exception:  # noqa: BLE001 - NotSupported / permission / gone
+        return None
     ph = env.get("HERMES_HOME")
     if ph:
         return Path(os.path.realpath(os.path.expanduser(ph))) == home
@@ -93,12 +98,27 @@ def discover_hermes(plat: Platform, home_override=None) -> Target | None:
     given = hermes_home(home_override)
     if not given.is_dir():
         return None
+    if home_override and not looks_like_hermes(given):
+        return None
     # Resolve the root exactly once. Everything below it is walked with no-follow
     # semantics; a symlink *as* the root is a user choice, a symlink *inside* is not.
     home = Path(os.path.realpath(given))
-    procs = [p for p in plat.find_processes("hermes_cli") if _is_hermes_proc(p) and _belongs_to(p, home, plat)]
+    procs: list[dict] = []
+    unattributed: list[int] = []
+    for p in plat.find_processes("hermes_cli"):
+        if not _is_hermes_proc(p):
+            continue
+        owned = _belongs_to(p, home, plat)
+        if owned:
+            procs.append(p)
+        elif owned is None:
+            unattributed.append(p["pid"])
     gateway_pids = [p["pid"] for p in procs if "gateway" in p["cmdline"]]
-    return Target(
+    notes: list[str] = []
+    if unattributed and not procs:
+        notes.append(f"hermes pid(s) {', '.join(map(str, unattributed))} could not be attributed to this home (process environment unreadable); "
+                     "treated as not this install's, so listener and process probes see no running daemon")
+    t = Target(
         framework="hermes",
         home=home,
         version=_version(home),
@@ -107,6 +127,13 @@ def discover_hermes(plat: Platform, home_override=None) -> Target | None:
         meta={
             "home_as_given": str(given) if given != home else None,
             "gateway_pids": gateway_pids,
+            "unattributed_pids": unattributed,
             "gateway_socket": str(home / "gateway.sock") if (home / "gateway.sock").exists() else None,
         },
     )
+    from daemonaudit.discover.settings import load_settings
+
+    s = load_settings(t, plat)
+    t.meta["config_error"] = s.parse_error
+    t.meta["notes"] = notes + ([s.parse_error] if s.parse_error else [])
+    return t
